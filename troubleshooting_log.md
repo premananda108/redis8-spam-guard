@@ -1,56 +1,54 @@
-# Troubleshooting Log
+# Протокол Устранения Неполадок (25.07.2025)
 
-## Issue: `TypeError: duplicate base class TimeoutError` on startup
+Этот документ описывает шаги, предпринятые для диагностики и устранения проблем при первоначальной настройке и обучении модели Spam Guard.
 
-**Date:** 2025-07-25
+## 1. Ошибка совместимости `aioredis`
 
-### Symptoms
+- **Проблема:** При первом запуске приложения возникла ошибка `TypeError: duplicate base class TimeoutError`.
+- **Причина:** Установленная версия библиотеки `aioredis` была несовместима с используемой версией Python. В новых версиях Python классы `asyncio.TimeoutError` и `builtins.TimeoutError` являются одним и тем же, что приводило к ошибке при попытке унаследовать оба.
+- **Решение:** Был отредактирован файл `D:\redis8-spam-guard\.venv\Lib\site-packages\aioredis\exceptions.py`, и из определения класса `TimeoutError` было убрано дублирующее наследование `builtins.TimeoutError`.
 
-When starting the application with `uvicorn main:app --reload`, the application fails with the following traceback:
+## 2. Отсутствующая зависимость для обучения
 
-```
-Traceback (most recent call last):
-  File "D:\redis8-spam-guard\main.py", line 13, in <module>
-    import aioredis
-  File "D:\redis8-spam-guard\.venv\Lib\site-packages\aioredis\__init__.py", line 1, in <module>
-    from aioredis.client import Redis, StrictRedis
-  File "D:\redis8-spam-guard\.venv\Lib\site-packages\aioredis\client.py", line 32, in <module>
-    from aioredis.connection import (
-        ...
-    )
-  File "D:\redis8-spam-guard\.venv\Lib\site-packages\aioredis\connection.py", line 33, in <module>
-    from .exceptions import (
-        ...
-    )
-  File "D:\redis8-spam-guard\.venv\Lib\site-packages\aioredis\exceptions.py", line 14, in <module>
-    class TimeoutError(asyncio.TimeoutError, builtins.TimeoutError, RedisError):
-        pass
-TypeError: duplicate base class TimeoutError
-```
+- **Проблема:** Скрипт `train_model.py` не запускался, выдавая ошибку `ModuleNotFoundError: No module named 'aiohttp'`.
+- **Причина:** Библиотека `aiohttp`, необходимая для асинхронных HTTP-запросов в скрипте обучения, не была указана в файле `requirements.txt`.
+- **Решение:** Зависимость была установлена вручную с помощью команды `pip install aiohttp`.
 
-### Cause
+## 3. Ключевая проблема: Неправильная версия Redis и отсутствующие модули
 
-The error is caused by an incompatibility between the `aioredis` library and newer versions of Python. In recent Python versions, `asyncio.TimeoutError` and `builtins.TimeoutError` are the same class. The `aioredis` code attempts to inherit from both, causing a `TypeError`.
+Это была самая сложная и многоэтапная проблема.
 
-### Resolution
+### 3.1. Первоначальная ошибка: `unknown command 'VSET.ADD'`
 
-The issue was resolved by modifying the source code of the installed `aioredis` library within the virtual environment.
+- **Проблема:** Скрипт обучения падал с ошибкой, указывающей, что Redis не знает команду `VSET.ADD`.
+- **Первоначальная гипотеза:** Мы используем неправильную версию Redis. Пользователь справедливо заметил, что в Docker работает версия `7.4.5`, хотя проект рассчитан на Redis 8.
 
-1.  **File Modified**: `D:\redis8-spam-guard\.venv\Lib\site-packages\aioredis\exceptions.py`
-2.  **Change**: The `TimeoutError` class definition was changed to remove the redundant base class.
+### 3.2. Расследование и попытки запуска Redis 8
 
-    **Original line:**
-    ```python
-    class TimeoutError(asyncio.TimeoutError, builtins.TimeoutError, RedisError):
-        pass
-    ```
+- **Попытка 1:** Запуск `redis/redis-stack:latest`. **Результат:** Установилась версия 7.4.5.
+- **Попытка 2:** Запуск `redis/redis-stack` с различными тегами, содержащими "8" (например, `8.0.0-preview.2`). **Результат:** Ошибки "tag not found".
+- **Попытка 3:** Запуск базового образа `redis:8.0.3-bookworm`. **Результат:** Версия 8.0.3 была успешно запущена, но обучение снова провалилось с ошибкой `unknown command`, так как этот образ не содержит необходимых модулей для векторного поиска (RediSearch).
 
-    **Modified line:**
-    ```python
-    class TimeoutError(asyncio.TimeoutError, RedisError):
-        pass
-    ```
+### 3.3. Стратегический поворот: Переход на RediSearch
 
-This change eliminates the error and allows the application to start successfully.
+- **Вывод:** Вместо того чтобы полагаться на новые и, возможно, еще не полностью поддерживаемые клиентской библиотекой команды `Vector Sets` (`VADD`, `VSIM`), было принято решение перейти на более стабильный и проверенный модуль **RediSearch**, который также поставляется с `redis-stack`.
+- **План:** Модифицировать код для использования команд RediSearch:
+    - `FT.CREATE` для создания индекса.
+    - `HSET` для сохранения данных (включая бинарное представление вектора).
+    - `FT.SEARCH` для выполнения поиска по вектору.
 
-```
+## 4. Рефакторинг кода и сопутствующие ошибки
+
+- **Проблема:** После принятия решения о переходе на RediSearch потребовалось внести значительные изменения в `main.py`.
+- **Решение:**
+    1. Класс `RedisVectorClassifier` был полностью переписан для работы с командами `FT.CREATE`, `HSET` и `FT.SEARCH`.
+    2. Класс `VectorSetClassifier` был переименован в `RediSearchClassifier` и адаптирован под новую логику.
+- **Возникшие ошибки в процессе:**
+    1. **`aioredis.exceptions.ResponseError: Unknown index name`**: Код неправильно обрабатывал ситуацию, когда индекс еще не существует. Была исправлена обработка исключений с `redis.exceptions.ResponseError` на `aioredis.exceptions.ResponseError`.
+    2. **`ImportError: cannot import name 'VectorSetClassifier'`**: Скрипт `train_model.py` пытался импортировать старое имя класса. Импорт был исправлен на `RediSearchClassifier`.
+    3. **`AttributeError: 'int' object has no attribute 'decode'`**: Логика разбора результатов поиска `FT.SEARCH` была неверной, так как она не учитывала, что ответ от Redis содержит как строки, так и числа. Цикл разбора был исправлен для корректной обработки смешанных типов данных.
+
+## 5. Успешное завершение
+
+После последовательного устранения всех вышеперечисленных проблем, скрипт `train_model.py` был успешно запущен и выполнен до конца. Модель была обучена, и результаты оценки сохранены в `training_results.json`.
+

@@ -5,3 +5,4 @@ aioredis
 numpy
 sentence-transformers
 pydantic
+aiohttp

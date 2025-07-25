@@ -81,35 +81,50 @@ class RedisVectorClassifier:
         self.redis_client = None
         self.model = SentenceTransformer('all-MiniLM-L6-v2')
         self.vector_dim = 384 + 5  # размерность эмбеддинга + числовые признаки
-        
+        self.index_name = "post_vectors"
+
     async def init_redis(self):
-        """Асинхронная инициализация Redis"""
+        """Асинхронная инициализация Redis и создание индекса"""
         try:
             self.redis_client = await aioredis.from_url(
-                "redis://localhost:6379", 
+                "redis://localhost:6379",
                 decode_responses=False
             )
             logger.info("Redis connection established")
+            await self.create_index()
         except Exception as e:
-            logger.error(f"Failed to connect to Redis: {e}")
+            logger.error(f"Failed to connect to Redis or create index: {e}")
             raise
-    
+
+    async def create_index(self):
+        """Создание индекса RediSearch для векторов"""
+        try:
+            # Проверяем, существует ли индекс
+            await self.redis_client.execute_command("FT.INFO", self.index_name)
+            logger.info(f"Index '{self.index_name}' already exists.")
+        except aioredis.exceptions.ResponseError:
+            # Индекс не существует, создаем его
+            logger.info(f"Creating index '{self.index_name}'")
+            schema = (
+                "vector", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32", "DIM", str(self.vector_dim), "DISTANCE_METRIC", "L2",
+                "label", "TAG"
+            )
+            await self.redis_client.execute_command(
+                "FT.CREATE", self.index_name, "ON", "HASH", "PREFIX", "1", "post:", "SCHEMA", *schema
+            )
+
     def preprocess_text(self, text: Optional[str]) -> str:
         """Очистка текста"""
         if not text:
             return ""
         
-        # Удаляем HTML теги
         text = re.sub(r'<[^>]+>', '', text)
-        # Удаляем URLs
-        text = re.sub(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', '', text)
-        # Удаляем лишние пробелы
+        text = re.sub(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', '', text)
         text = re.sub(r'\s+', ' ', text)
-        # Приводим к нижнему регистру
         text = text.lower().strip()
         
         return text
-    
+
     def create_features(self, post: DevToPost) -> Dict[str, Any]:
         """Создание признаков для классификации"""
         return {
@@ -121,49 +136,41 @@ class RedisVectorClassifier:
             'comments_count': post.comments_count,
             'user_followers': post.user.get('followers_count', 0) if post.user else 0
         }
-    
+
     def get_spam_indicators(self, features: Dict[str, Any]) -> List[str]:
         """Определение индикаторов спама"""
         indicators = []
         
-        # Короткие посты с малым количеством реакций
         if features['reading_time'] < 2 and features['reactions_count'] < 5:
             indicators.append("Short post with low engagement")
         
-        # Подозрительные ключевые слова
         spam_words = ['earn money', 'get rich', 'click here', 'free offer', 'buy now', 'limited time']
         title_lower = features['title'].lower()
         if any(word in title_lower for word in spam_words):
             indicators.append("Contains spam keywords")
         
-        # Посты без описания
         if not features['description']:
             indicators.append("Missing description")
         
-        # Слишком много тегов (возможный спам)
         if len(features['tags']) > 10:
             indicators.append("Too many tags")
         
-        # Новый пользователь с малым количеством подписчиков
         if features['user_followers'] < 10:
             indicators.append("Low follower count")
             
         return indicators
-    
+
     async def vectorize_post(self, post: DevToPost) -> np.ndarray:
         """Создание вектора из поста"""
         features = self.create_features(post)
         
-        # Объединяем текстовые поля
         combined_text = f"{features['title']} {features['description']}"
         
-        # Создаем эмбеддинг (выполняем в отдельном потоке)
         loop = asyncio.get_event_loop()
         text_vector = await loop.run_in_executor(
             None, self.model.encode, combined_text
         )
         
-        # Добавляем числовые признаки
         numeric_features = np.array([
             features['reading_time'],
             features['reactions_count'],
@@ -172,49 +179,48 @@ class RedisVectorClassifier:
             len(features['tags'])
         ], dtype=np.float32)
         
-        # Нормализуем числовые признаки
         numeric_features = numeric_features / (np.linalg.norm(numeric_features) + 1e-8)
         
-        # Объединяем векторы
         final_vector = np.concatenate([text_vector, numeric_features])
         
         return final_vector.astype(np.float32)
-    
+
     async def store_training_vector(self, post_id: int, vector: np.ndarray, label: int):
         """Сохранение вектора в Redis для обучения"""
         try:
-            vector_key = f"training_vector:{post_id}"
-            label_key = f"training_label:{post_id}"
-            
-            # Сохраняем вектор в Redis vector set
-            await self.redis_client.execute_command(
-                'VSET.ADD', 'training_vectors', str(post_id), 
-                *vector.tolist()
-            )
-            
-            # Сохраняем метку
-            await self.redis_client.set(label_key, label)
-            
+            post_key = f"post:{post_id}"
+            await self.redis_client.hset(post_key, mapping={
+                "vector": vector.tobytes(),
+                "label": "spam" if label == 1 else "not_spam"
+            })
             logger.info(f"Stored training vector for post {post_id}")
-            
         except Exception as e:
             logger.error(f"Failed to store training vector: {e}")
             raise
-    
+
     async def find_similar_posts(self, query_vector: np.ndarray, k: int = 5) -> List[tuple]:
         """Поиск похожих постов"""
         try:
+            query = (
+                f"*=>[KNN {k} @vector $blob AS score]"
+            )
             results = await self.redis_client.execute_command(
-                'VSET.SEARCH', 'training_vectors', 'VECTOR', 
-                *query_vector.tolist(), 'LIMIT', k
+                "FT.SEARCH", self.index_name, query, "PARAMS", "2", "blob", query_vector.tobytes(), "DIALECT", "2"
             )
             
-            # Парсим результаты
             similar_posts = []
-            for i in range(0, len(results), 2):
-                post_id = results[i].decode('utf-8')
-                distance = float(results[i + 1])
-                similar_posts.append((post_id, distance))
+            # The first result is the total number of documents, so we skip it.
+            for i in range(1, len(results)):
+                doc = results[i]
+                if isinstance(doc, list):
+                    post_id = doc[0].decode('utf-8').split(':')[-1]
+                    # The score is in the field list, after the 'score' key
+                    try:
+                        score_index = doc[1].index(b'score') + 1
+                        score = float(doc[1][score_index])
+                        similar_posts.append((post_id, score))
+                    except (ValueError, IndexError):
+                        continue
             
             return similar_posts
             
@@ -222,7 +228,8 @@ class RedisVectorClassifier:
             logger.error(f"Failed to find similar posts: {e}")
             return []
 
-class VectorSetClassifier:
+
+class RediSearchClassifier:
     def __init__(self, redis_classifier: RedisVectorClassifier, k: int = 5):
         self.redis_classifier = redis_classifier
         self.k = k
@@ -233,14 +240,11 @@ class VectorSetClassifier:
         start_time = time.time()
         
         try:
-            # Векторизуем новый пост
             query_vector = await self.redis_classifier.vectorize_post(post)
             
-            # Находим k ближайших соседей
             similar_posts = await self.redis_classifier.find_similar_posts(query_vector, self.k)
             
             if not similar_posts:
-                # Если нет обучающих данных, используем эвристики
                 features = self.redis_classifier.create_features(post)
                 spam_indicators = self.redis_classifier.get_spam_indicators(features)
                 is_spam = len(spam_indicators) >= 2
@@ -249,23 +253,20 @@ class VectorSetClassifier:
                 processing_time = (time.time() - start_time) * 1000
                 return int(is_spam), confidence, spam_indicators
             
-            # Собираем метки ближайших соседей
             labels = []
-            for post_id, distance in similar_posts:
-                label_key = f"training_label:{post_id}"
-                label = await self.redis_classifier.redis_client.get(label_key)
+            for post_id, score in similar_posts:
+                label = await self.redis_classifier.redis_client.hget(f"post:{post_id}", "label")
                 if label:
-                    labels.append(int(label))
+                    labels.append(label.decode('utf-8'))
             
             if not labels:
                 return 0, 0.5, ["No training data available"]
             
-            # Голосование большинства с весами по расстоянию
             label_counts = Counter(labels)
-            predicted_label = label_counts.most_common(1)[0][0]
-            confidence = label_counts[predicted_label] / len(labels)
+            predicted_label_str = label_counts.most_common(1)[0][0]
+            predicted_label = 1 if predicted_label_str == "spam" else 0
+            confidence = label_counts[predicted_label_str] / len(labels)
             
-            # Получаем объяснение
             features = self.redis_classifier.create_features(post)
             reasoning = self.redis_classifier.get_spam_indicators(features)
             if not reasoning and predicted_label == 1:
@@ -282,7 +283,7 @@ class VectorSetClassifier:
 
 # Глобальные объекты
 redis_classifier = RedisVectorClassifier()
-classifier = VectorSetClassifier(redis_classifier)
+classifier = RediSearchClassifier(redis_classifier)
 
 @app.on_event("startup")
 async def startup_event():

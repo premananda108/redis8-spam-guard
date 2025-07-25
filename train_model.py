@@ -262,9 +262,9 @@ class ModelTrainer:
     
     async def evaluate_model(self, test_data: List[tuple]) -> Dict[str, float]:
         """Оценка качества модели"""
-        from main import VectorSetClassifier
+        from main import RediSearchClassifier
         
-        classifier = VectorSetClassifier(self.redis_classifier)
+        classifier = RediSearchClassifier(self.redis_classifier)
         
         true_positives = false_positives = true_negatives = false_negatives = 0
         
