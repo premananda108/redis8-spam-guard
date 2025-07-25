@@ -1,15 +1,15 @@
 {
-  "timestamp": "2025-07-25T18:10:09.095591",
-  "training_samples": 959,
+  "timestamp": "2025-07-25T21:43:46.574184",
+  "training_samples": 958,
   "test_samples": 240,
   "metrics": {
-    "accuracy": 0.9,
-    "precision": 0.22580645161290322,
+    "accuracy": 0.9083333333333333,
+    "precision": 0.2413793103448276,
     "recall": 1.0,
-    "f1_score": 0.3684210526315789,
+    "f1_score": 0.3888888888888889,
     "true_positives": 7,
-    "false_positives": 24,
-    "true_negatives": 209,
+    "false_positives": 22,
+    "true_negatives": 211,
     "false_negatives": 0
   }
 }

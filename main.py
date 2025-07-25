@@ -313,9 +313,11 @@ async def root():
             .not-spam { background-color: #e8f5e8; border-color: #4caf50; }
             .uncertain { background-color: #fff3e0; border-color: #ff9800; }
             .reasoning { font-size: 0.9em; color: #666; margin-top: 10px; }
-            .controls { margin: 20px 0; }
+            .controls { margin: 20px 0; display: flex; align-items: center; gap: 10px; }
             button { padding: 10px 20px; margin: 5px; cursor: pointer; }
+            button:disabled { cursor: not-allowed; opacity: 0.5; }
             .loading { opacity: 0.6; }
+            #page-indicator { font-weight: bold; }
         </style>
     </head>
     <body>
@@ -323,14 +325,23 @@ async def root():
         <p>AI-powered spam detection using Redis 8 Vector Sets</p>
         
         <div class="controls">
-            <button onclick="loadAndClassifyPosts()">🔄 Load Latest Posts</button>
+            <button onclick="resetAndLoad()">🔄 Load Latest Posts</button>
             <button onclick="showStats()">📊 Show Statistics</button>
         </div>
         
         <div id="stats-container"></div>
         <div id="posts-container"></div>
         
+        <div id="pagination-controls" class="controls">
+            <button id="prev-button" onclick="prevPage()">⬅️ Previous</button>
+            <span id="page-indicator">Page 1</span>
+            <button id="next-button" onclick="nextPage()">Next ➡️</button>
+        </div>
+        
         <script>
+            let currentPage = 1;
+            const postsPerPage = 10;
+
             async function classifyPost(postData) {
                 const response = await fetch('/classify', {
                     method: 'POST',
@@ -345,15 +356,27 @@ async def root():
                 return await response.json();
             }
             
-            async function loadAndClassifyPosts() {
+            async function loadAndClassifyPosts(page) {
                 const container = document.getElementById('posts-container');
-                container.innerHTML = '<p>Loading posts...</p>';
+                const pageIndicator = document.getElementById('page-indicator');
+                const prevButton = document.getElementById('prev-button');
+                const nextButton = document.getElementById('next-button');
+
+                container.innerHTML = `<p>Loading page ${page}...</p>`;
+                pageIndicator.textContent = `Page ${page}`;
+                prevButton.disabled = page <= 1;
                 
                 try {
-                    // Загружаем посты с dev.to
-                    const response = await fetch('https://dev.to/api/articles?per_page=10');
+                    const response = await fetch(`https://dev.to/api/articles?per_page=${postsPerPage}&page=${page}`);
                     const posts = await response.json();
                     
+                    if (posts.length === 0) {
+                        container.innerHTML = '<p>No more posts found.</p>';
+                        nextButton.disabled = true;
+                        return;
+                    }
+                    nextButton.disabled = false;
+
                     container.innerHTML = '';
                     
                     for (const post of posts) {
@@ -411,6 +434,23 @@ async def root():
                     container.innerHTML = `<p style="color: red;">Error loading posts: ${error.message}</p>`;
                 }
             }
+
+            function nextPage() {
+                currentPage++;
+                loadAndClassifyPosts(currentPage);
+            }
+
+            function prevPage() {
+                if (currentPage > 1) {
+                    currentPage--;
+                    loadAndClassifyPosts(currentPage);
+                }
+            }
+
+            function resetAndLoad() {
+                currentPage = 1;
+                loadAndClassifyPosts(currentPage);
+            }
             
             async function showStats() {
                 try {
@@ -433,7 +473,9 @@ async def root():
             }
             
             // Автоматически загружаем посты при загрузке страницы
-            document.addEventListener('DOMContentLoaded', loadAndClassifyPosts);
+            document.addEventListener('DOMContentLoaded', () => {
+                loadAndClassifyPosts(currentPage);
+            });
         </script>
     </body>
     </html>
