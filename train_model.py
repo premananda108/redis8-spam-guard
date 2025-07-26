@@ -305,8 +305,30 @@ class ModelTrainer:
             'false_negatives': false_negatives
         }
 
+import logging
+from typing import List, Dict, Any, Optional
+from asyncio import Queue
+
+# Специальный обработчик для перенаправления логов в очередь
+class QueueLogHandler(logging.Handler):
+    def __init__(self, queue: Queue):
+        super().__init__()
+        self.queue = queue
+
+    def emit(self, record):
+        self.queue.put_nowait(self.format(record))
+
 async def main(classifier: RedisVectorClassifier):
     """Основная функция обучения"""
+    # Настройка логирования в файл
+    log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    file_handler = logging.FileHandler("training.log", mode='w') # 'w' для перезаписи файла при каждом запуске
+    file_handler.setFormatter(log_formatter)
+    # Удаляем все предыдущие обработчики и добавляем наш
+    root_logger = logging.getLogger()
+    root_logger.handlers = [file_handler]
+    root_logger.setLevel(logging.INFO)
+
     logger.info("Starting model training process")
 
     trainer = ModelTrainer(classifier)

@@ -78,7 +78,7 @@ async def root():
             .manual-check-form h2 { margin-top: 0; }
             .manual-check-form label { display: block; margin-top: 10px; font-weight: bold; }
             .manual-check-form input, .manual-check-form textarea { width: 100%; padding: 8px; margin-top: 5px; border-radius: 4px; border: 1px solid #ccc; box-sizing: border-box; }
-            #manual-check-result { margin-top: 20px; }
+            #log-container { background-color: #222; color: #0f0; font-family: monospace; padding: 15px; height: 400px; overflow-y: scroll; border-radius: 5px; margin-top: 20px; white-space: pre-wrap; }
         </style>
     </head>
     <body>
@@ -94,6 +94,11 @@ async def root():
             
             <div id="stats-container"></div>
             <div id="redis-info-container"></div>
+            <div id="log-container-wrapper" style="display: none;">
+                <h3>🎓 Training Logs</h3>
+                <button onclick="refreshLogs()">🔄 Refresh Logs</button>
+                <pre id="log-container"></pre>
+            </div>
             <div id="posts-container"></div>
             
             <div id="pagination-controls" class="controls">
@@ -311,6 +316,8 @@ async def root():
             }
 
             function resetAndLoad() {
+                document.getElementById('stats-container').innerHTML = ''; // Скрываем статистику
+                switchView('moderation');
                 currentPage = 1;
                 loadAndClassifyPosts(currentPage);
             }
@@ -371,30 +378,62 @@ async def root():
             }
 
             async function startTraining() {
+                document.getElementById('stats-container').innerHTML = ''; // Скрываем статистику
+                switchView('training');
                 const trainButton = document.getElementById('train-button');
+                
                 trainButton.disabled = true;
                 trainButton.textContent = '👨‍🏫 Training in progress...';
+                await refreshLogs();
 
                 try {
                     const response = await fetch('/train', { method: 'POST' });
                     const result = await response.json();
-                    
                     alert(result.message);
-                    
-                    // Обновляем статистику после обучения
-                    showStats();
-                    showRedisInfo();
-
                 } catch (error) {
                     alert(`Training failed: ${error.message}`);
                 } finally {
                     trainButton.disabled = false;
                     trainButton.textContent = '🚀 Train Model';
+                    // Обновляем статистику и логи после завершения
+                    showStats();
+                    showRedisInfo();
+                    refreshLogs();
+                }
+            }
+
+            async function refreshLogs() {
+                const logContainer = document.getElementById('log-container');
+                try {
+                    const response = await fetch('/get-logs');
+                    const logs = await response.text();
+                    logContainer.textContent = logs || 'No logs yet. Training may be in progress.';
+                    logContainer.scrollTop = logContainer.scrollHeight;
+                } catch (error) {
+                    console.error("Failed to fetch logs:", error);
+                    logContainer.textContent = "Error loading logs.";
+                }
+            }
+
+            function switchView(viewName) {
+                const logWrapper = document.getElementById('log-container-wrapper');
+                const postsContainer = document.getElementById('posts-container');
+                const paginationControls = document.getElementById('pagination-controls');
+
+                if (viewName === 'training') {
+                    postsContainer.style.display = 'none';
+                    paginationControls.style.display = 'none';
+                    logWrapper.style.display = 'block';
+                } else {
+                    postsContainer.style.display = 'block';
+                    paginationControls.style.display = 'flex';
+                    logWrapper.style.display = 'none';
                 }
             }
             
             // Автоматически загружаем посты при загрузке страницы
             document.addEventListener('DOMContentLoaded', () => {
+                switchView('moderation'); // Устанавливаем вид по умолчанию
                 loadAndClassifyPosts(currentPage);
                 showRedisInfo();
                 // Set default values for manual check
@@ -420,6 +459,15 @@ async def trigger_training(background_tasks: BackgroundTasks):
     background_tasks.add_task(run_training, redis_classifier)
     
     return {"message": "Model training started in the background. Check logs for progress."}
+
+@app.get("/get-logs")
+async def get_logs():
+    """Чтение и возврат файла с логами"""
+    try:
+        with open("training.log", "r") as f:
+            return HTMLResponse(content=f.read(), media_type="text/plain")
+    except FileNotFoundError:
+        return HTMLResponse(content="Log file not found. Training has not been run yet.", media_type="text/plain")
 
 @app.post("/classify", response_model=ClassificationResult)
 async def classify_post(post: DevToPost):
