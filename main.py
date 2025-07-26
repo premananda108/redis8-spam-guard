@@ -61,37 +61,79 @@ async def root():
     <head>
         <title>Dev.to Spam Classifier</title>
         <style>
-            body { font-family: Arial, sans-serif; margin: 20px; }
+            body { font-family: Arial, sans-serif; margin: 20px; display: flex; gap: 40px; }
+            .main-content { flex: 2; }
+            .sidebar { flex: 1; max-width: 400px; }
             .post { border: 1px solid #ddd; margin: 10px 0; padding: 15px; border-radius: 5px; }
             .spam { background-color: #ffebee; border-color: #f44336; }
             .not-spam { background-color: #e8f5e8; border-color: #4caf50; }
             .uncertain { background-color: #fff3e0; border-color: #ff9800; }
             .reasoning { font-size: 0.9em; color: #666; margin-top: 10px; }
-            .controls { margin: 20px 0; display: flex; align-items: center; gap: 10px; }
-            button { padding: 10px 20px; margin: 5px; cursor: pointer; }
+            .controls { margin: 20px 0; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+            button { padding: 10px 20px; margin: 5px; cursor: pointer; border-radius: 5px; border: 1px solid #ccc; background-color: #f0f0f0; }
             button:disabled { cursor: not-allowed; opacity: 0.5; }
             .loading { opacity: 0.6; }
             #page-indicator { font-weight: bold; }
+            .manual-check-form { background-color: #f9f9f9; padding: 20px; border-radius: 8px; border: 1px solid #eee; }
+            .manual-check-form h2 { margin-top: 0; }
+            .manual-check-form label { display: block; margin-top: 10px; font-weight: bold; }
+            .manual-check-form input, .manual-check-form textarea { width: 100%; padding: 8px; margin-top: 5px; border-radius: 4px; border: 1px solid #ccc; box-sizing: border-box; }
+            #manual-check-result { margin-top: 20px; }
         </style>
     </head>
     <body>
-        <h1>🚀 Dev.to Post Moderator Assistant</h1>
-        <p>AI-powered spam detection using Redis 8 Vector Sets</p>
-        
-        <div class="controls">
-            <button onclick="resetAndLoad()">🔄 Load Latest Posts</button>
-            <button onclick="showStats()">📊 Show Statistics</button>
-            <button id="train-button" onclick="startTraining()">🚀 Train Model</button>
+        <div class="main-content">
+            <h1>🚀 Dev.to Post Moderator Assistant</h1>
+            <p>AI-powered spam detection using Redis 8 Vector Sets</p>
+            
+            <div class="controls">
+                <button onclick="resetAndLoad()">🔄 Load Latest Posts</button>
+                <button onclick="showStats()">📊 Show Statistics</button>
+                <button id="train-button" onclick="startTraining()">🚀 Train Model</button>
+            </div>
+            
+            <div id="stats-container"></div>
+            <div id="redis-info-container"></div>
+            <div id="posts-container"></div>
+            
+            <div id="pagination-controls" class="controls">
+                <button id="prev-button" onclick="prevPage()">⬅️ Previous</button>
+                <span id="page-indicator">Page 1</span>
+                <button id="next-button" onclick="nextPage()">Next ➡️</button>
+            </div>
         </div>
-        
-        <div id="stats-container"></div>
-        <div id="redis-info-container"></div>
-        <div id="posts-container"></div>
-        
-        <div id="pagination-controls" class="controls">
-            <button id="prev-button" onclick="prevPage()">⬅️ Previous</button>
-            <span id="page-indicator">Page 1</span>
-            <button id="next-button" onclick="nextPage()">Next ➡️</button>
+
+        <div class="sidebar">
+            <div class="manual-check-form">
+                <h2>Manual Post Check</h2>
+                <p>Enter post details to get an instant diagnosis.</p>
+                <label for="manual-title">Title:</label>
+                <input type="text" id="manual-title" value="How to earn $1000 in a week!">
+                
+                <label for="manual-description">Description:</label>
+                <textarea id="manual-description" rows="4">Click this link now for a limited time offer. You won't regret it. Best crypto strategy.</textarea>
+                
+                <label for="manual-tags">Tags (comma-separated):</label>
+                <input type="text" id="manual-tags" value="money, crypto, investment, quick">
+                
+                <label for="manual-reactions">Reactions:</label>
+                <input type="number" id="manual-reactions" value="1">
+                
+                <label for="manual-comments">Comments:</label>
+                <input type="number" id="manual-comments" value="0">
+
+                <label for="manual-reading-time">Reading Time (minutes):</label>
+                <input type="number" id="manual-reading-time" value="1">
+
+                <label for="manual-followers">Author's Followers:</label>
+                <input type="number" id="manual-followers" value="5">
+                
+                <div class="controls">
+                    <button id="manual-check-button" onclick="performManualCheck()">🔬 Check Post</button>
+                </div>
+                
+                <div id="manual-check-result"></div>
+            </div>
         </div>
         
         <script>
@@ -106,10 +148,75 @@ async def root():
                 });
                 
                 if (!response.ok) {
-                    throw new Error('Classification failed');
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Classification failed');
                 }
                 
                 return await response.json();
+            }
+
+            async function performManualCheck() {
+                const button = document.getElementById('manual-check-button');
+                const resultContainer = document.getElementById('manual-check-result');
+                
+                button.disabled = true;
+                button.textContent = 'Checking...';
+                resultContainer.innerHTML = '';
+
+                const postData = {
+                    id: Math.floor(Math.random() * 1000000), // Fake ID
+                    title: document.getElementById('manual-title').value,
+                    description: document.getElementById('manual-description').value,
+                    tag_list: document.getElementById('manual-tags').value.split(',').map(t => t.trim()),
+                    public_reactions_count: parseInt(document.getElementById('manual-reactions').value) || 0,
+                    comments_count: parseInt(document.getElementById('manual-comments').value) || 0,
+                    reading_time_minutes: parseInt(document.getElementById('manual-reading-time').value) || 0,
+                    user: {
+                        // We need to simulate the user object for the backend
+                        id: Math.floor(Math.random() * 100000), // Fake user ID
+                        followers_count: parseInt(document.getElementById('manual-followers').value) || 0
+                    }
+                };
+
+                try {
+                    const classification = await classifyPost(postData);
+                    
+                    const postElement = document.createElement('div');
+                    postElement.className = `post ${classification.is_spam ? 'spam' : 
+                        (classification.confidence > 0.8 ? 'not-spam' : 'uncertain')}`;
+                    
+                    const statusEmoji = classification.is_spam ? '🚫' : '✅';
+                    const recommendationEmoji = {
+                        'block': '🚫',
+                        'review': '⚠️',
+                        'approve': '✅'
+                    }[classification.recommendation] || '❓';
+                    
+                    postElement.innerHTML = `
+                        <h3>Diagnosis Result</h3>
+                        <div>
+                            <strong>${statusEmoji} Classification:</strong> ${classification.is_spam ? 'SPAM' : 'LEGITIMATE'}
+                            (${(classification.confidence * 100).toFixed(1)}% confidence)
+                        </div>
+                        <div>
+                            <strong>${recommendationEmoji} Recommendation:</strong> ${classification.recommendation.toUpperCase()}
+                        </div>
+                        <div><strong>⏱️ Processing time:</strong> ${classification.processing_time_ms.toFixed(1)}ms</div>
+                        ${classification.reasoning.length > 0 ? `
+                            <div class="reasoning">
+                                <strong>🧠 Reasoning:</strong>
+                                <ul>${classification.reasoning.map(r => `<li>${r}</li>`).join('')}</ul>
+                            </div>
+                        ` : ''}
+                    `;
+                    resultContainer.appendChild(postElement);
+
+                } catch (error) {
+                    resultContainer.innerHTML = `<div style="color: red;">Error: ${error.message}</div>`;
+                } finally {
+                    button.disabled = false;
+                    button.textContent = '🔬 Check Post';
+                }
             }
             
             async function loadAndClassifyPosts(page) {
@@ -139,7 +246,7 @@ async def root():
                         const postElement = document.createElement('div');
                         postElement.className = 'post loading';
                         postElement.innerHTML = `
-                            <h3>${post.title}</h3>
+                            <h3><a href="${post.url}" target="_blank">${post.title}</a></h3>
                             <p>${post.description || 'No description'}</p>
                             <div><strong>Tags:</strong> ${post.tag_list.join(', ')}</div>
                             <div><strong>Reading time:</strong> ${post.reading_time_minutes} min</div>
@@ -161,7 +268,7 @@ async def root():
                             }[classification.recommendation] || '❓';
                             
                             postElement.innerHTML = `
-                                <h3>${post.title}</h3>
+                                <h3><a href="${post.url}" target="_blank">${post.title}</a></h3>
                                 <p>${post.description || 'No description'}</p>
                                 <div><strong>Tags:</strong> ${post.tag_list.join(', ')}</div>
                                 <div><strong>Reading time:</strong> ${post.reading_time_minutes} min</div>
@@ -290,6 +397,14 @@ async def root():
             document.addEventListener('DOMContentLoaded', () => {
                 loadAndClassifyPosts(currentPage);
                 showRedisInfo();
+                // Set default values for manual check
+                document.getElementById('manual-title').value = "How to earn $1000 in a week!";
+                document.getElementById('manual-description').value = "Click this link now for a limited time offer. You won't regret it. Best crypto strategy.";
+                document.getElementById('manual-tags').value = "money, crypto, investment, quick";
+                document.getElementById('manual-reactions').value = "1";
+                document.getElementById('manual-comments').value = "0";
+                document.getElementById('manual-reading-time').value = "1";
+                document.getElementById('manual-followers').value = "5";
             });
         </script>
     </body>
