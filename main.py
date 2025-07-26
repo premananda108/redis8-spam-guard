@@ -314,8 +314,22 @@ class RediSearchClassifier:
             # Запасной вариант, если Redis недоступен или похожих постов не найдено
             # Используем признаки, полученные из vectorize_post
             spam_indicators = self.redis_classifier.get_spam_indicators(features)
-            is_spam = len(spam_indicators) >= 3 # Более строгий порог без Redis
-            confidence = 0.65 if is_spam else 0.6
+            
+            num_indicators = len(spam_indicators)
+            
+            if num_indicators == 0:
+                is_spam = 0
+                confidence = 0.8
+            elif num_indicators == 1:
+                is_spam = 0
+                confidence = 0.6
+            elif num_indicators == 2:
+                is_spam = 1
+                confidence = 0.7
+            else:  # 3 и более
+                is_spam = 1
+                confidence = 0.9
+            
             reasoning = spam_indicators if spam_indicators else ["Heuristic analysis based on post content."]
             if not self.redis_classifier.redis_client:
                 reasoning.append("Redis is not connected, classification is based on heuristics only.")
