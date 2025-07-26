@@ -11,7 +11,7 @@ import logging
 from typing import List, Dict, Any
 from datetime import datetime, timedelta
 import numpy as np
-from main import redis_classifier, DevToPost
+from core import DevToPost, RedisVectorClassifier, RediSearchClassifier
 import time
 import random
 
@@ -189,8 +189,8 @@ class SpamLabelGenerator:
         return 1 if final_score > 0.5 else 0
 
 class ModelTrainer:
-    def __init__(self):
-        self.redis_classifier = redis_classifier
+    def __init__(self, classifier: RedisVectorClassifier):
+        self.redis_classifier = classifier
         self.label_generator = SpamLabelGenerator()
     
     async def prepare_training_data(self, articles: List[Dict]) -> List[tuple]:
@@ -262,8 +262,6 @@ class ModelTrainer:
     
     async def evaluate_model(self, test_data: List[tuple]) -> Dict[str, float]:
         """Оценка качества модели"""
-        from main import RediSearchClassifier
-        
         classifier = RediSearchClassifier(self.redis_classifier)
         
         true_positives = false_positives = true_negatives = false_negatives = 0
@@ -303,11 +301,11 @@ class ModelTrainer:
             'false_negatives': false_negatives
         }
 
-async def main():
+async def main(classifier: RedisVectorClassifier):
     """Основная функция обучения"""
     logger.info("Starting model training process")
 
-    trainer = ModelTrainer()
+    trainer = ModelTrainer(classifier)
     await trainer.redis_classifier.init_redis()
 
     if not trainer.redis_classifier.redis_client:
@@ -372,4 +370,8 @@ async def main():
     logger.info("Results saved to training_results.json")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Этот блок больше не будет выполняться при импорте
+    # Для запуска из командной строки потребуется отдельный скрипт
+    # или изменение логики в main.py для передачи классификатора
+    pass
+
