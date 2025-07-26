@@ -481,12 +481,15 @@ async def root():
                     const stats = await response.json();
                     
                     const statsContainer = document.getElementById('stats-container');
+                    const accuracy_text = stats.accuracy ? `${(stats.accuracy * 100).toFixed(2)}%` : 'N/A';
+
                     statsContainer.innerHTML = `
                         <div style="background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 10px 0;">
                             <h3>📊 Classification Statistics</h3>
-                            <p><strong>Total classified:</strong> ${stats.total_classified}</p>
-                            <p><strong>Spam detected:</strong> ${stats.spam_detected}</p>
+                            <p><strong>Total classified (since last start):</strong> ${stats.total_classified}</p>
+                            <p><strong>Spam detected (since last start):</strong> ${stats.spam_detected}</p>
                             <p><strong>Spam rate:</strong> ${(stats.spam_detected / Math.max(stats.total_classified, 1) * 100).toFixed(1)}%</p>
+                            <p><strong>Model Accuracy (from training):</strong> ${accuracy_text}</p>
                             <p><strong>Last updated:</strong> ${new Date(stats.last_updated).toLocaleString()}</p>
                         </div>
                     `;
@@ -563,7 +566,28 @@ async def classify_post(post: DevToPost):
             processing_time_ms=processing_time
         )
         
-        # Логируем для статистики
+        # Асинхронно обновляем статистику в Redis
+        if redis_classifier.redis_client:
+            async def update_stats():
+                try:
+                    p = redis_classifier.redis_client.pipeline()
+                    p.incr("stats:total_classified")
+                    if prediction == 1:
+                        p.incr("stats:spam_detected")
+                    await p.execute()
+                    logger.info("Stats updated in Redis.")
+                except Exception as e:
+                    logger.error(f"Failed to update stats in Redis: {e}")
+            
+            background_tasks = BackgroundTasks()
+            background_tasks.add_task(update_stats)
+            # Это нужно для FastAPI, чтобы задача выполнилась в фоне
+            # В данном контексте вызов будет выглядеть так:
+            # response = JSONResponse(result.dict())
+            # response.background = background_tasks
+            # Но для простоты мы просто вызовем ее напрямую
+            await update_stats() # Упрощенный вызов для данного примера
+
         logger.info(f"Classified post {post.id}: {'SPAM' if prediction else 'OK'} ({confidence:.2f})")
         
         return result
@@ -633,22 +657,36 @@ async def moderator_feedback(feedback: ModeratorFeedback):
 @app.get("/stats", response_model=StatsResponse)
 async def get_stats():
     """Статистика классификации"""
+    total_classified = 0
+    spam_detected = 0
+    accuracy = None
+
+    # Пытаемся получить статистику из Redis
+    if redis_classifier.redis_client:
+        try:
+            total_classified_bytes, spam_detected_bytes = await redis_classifier.redis_client.mget(
+                "stats:total_classified", "stats:spam_detected"
+            )
+            total_classified = int(total_classified_bytes) if total_classified_bytes else 0
+            spam_detected = int(spam_detected_bytes) if spam_detected_bytes else 0
+        except Exception as e:
+            logger.error(f"Failed to get stats from Redis: {e}")
+            # Не прерываем выполнение, просто вернем нули
+
+    # Пытаемся прочитать точность из файла результатов обучения
     try:
-        # Здесь можно добавить реальную статистику из Redis
-        # Для демо возвращаем примерные данные
-        
-        stats = StatsResponse(
-            total_classified=150,
-            spam_detected=23,
-            accuracy=0.94,
-            last_updated=datetime.now()
-        )
-        
-        return stats
-        
-    except Exception as e:
-        logger.error(f"Failed to get stats: {e}")
-        raise HTTPException(status_code=500, detail="Failed to get statistics")
+        with open("training_results.json", "r") as f:
+            results = json.load(f)
+            accuracy = results.get("metrics", {}).get("accuracy")
+    except (FileNotFoundError, json.JSONDecodeError) as e:
+        logger.warning(f"Could not read or parse training_results.json: {e}")
+
+    return StatsResponse(
+        total_classified=total_classified,
+        spam_detected=spam_detected,
+        accuracy=accuracy,
+        last_updated=datetime.now()
+    )
 
 @app.get("/health")
 async def health_check():
