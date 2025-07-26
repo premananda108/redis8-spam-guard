@@ -235,7 +235,7 @@ async def root():
                 prevButton.disabled = page <= 1;
                 
                 try {
-                    const response = await fetch(`https://dev.to/api/articles?per_page=${postsPerPage}&page=${page}`);
+                    const response = await fetch(`https://dev.to/api/articles?state=fresh&per_page=${postsPerPage}&page=${page}`);
                     const posts = await response.json();
                     
                     if (posts.length === 0) {
@@ -681,6 +681,6 @@ if __name__ == "__main__":
         "main:app", 
         host="0.0.0.0", 
         port=8000, 
-        reload=True,
+        reload=False,
         log_level="info"
     )
