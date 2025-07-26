@@ -149,7 +149,9 @@ class RedisVectorClassifier:
             'reading_time': post.reading_time_minutes,
             'reactions_count': post.public_reactions_count,
             'comments_count': post.comments_count,
-            'user_followers': post.user.get('followers_count', 0) if post.user else 0
+            # ВАЖНО: API статей не возвращает followers_count, это поле будет обновлено позже
+            'user_followers': -1, # Используем -1 как индикатор, что данные не были загружены
+            'user_id': post.user.get('id') if post.user else None # Правильное поле - 'id'
         }
 
     def get_spam_indicators(self, features: Dict[str, Any]) -> List[str]:
@@ -170,15 +172,35 @@ class RedisVectorClassifier:
         if len(features['tags']) > 10:
             indicators.append("Too many tags")
         
-        if features['user_followers'] < 10:
-            indicators.append("Low follower count")
+        # Проверяем подписчиков, только если мы смогли их получить
+        if features['user_followers'] != -1 and features['user_followers'] < 10:
+            indicators.append(f"Low follower count ({features['user_followers']})")
             
         return indicators
 
-    async def vectorize_post(self, post: DevToPost) -> np.ndarray:
-        """Создание вектора из поста"""
+    async def vectorize_post(self, post: DevToPost) -> tuple[np.ndarray, Dict[str, Any]]:
+        """Создание вектора из поста и возврат обновленных признаков"""
         features = self.create_features(post)
         
+        user_followers = features.get('user_followers', -1)
+        user_id = features.get('user_id')
+
+        if user_id:
+            try:
+                loop = asyncio.get_event_loop()
+                user_response = await loop.run_in_executor(
+                    None, requests.get, f"https://dev.to/api/users/{user_id}"
+                )
+                if user_response.status_code == 200:
+                    user_data = user_response.json()
+                    user_followers = user_data.get('followers_count', 0)
+                    features['user_followers'] = user_followers # Обновляем словарь!
+                    logger.info(f"Successfully fetched followers for user {user_id}: {user_followers}")
+                else:
+                    logger.warning(f"Failed to fetch user data for user {user_id}")
+            except Exception as e:
+                logger.error(f"Error fetching user data: {e}")
+
         combined_text = f"{features['title']} {features['description']}"
         
         loop = asyncio.get_event_loop()
@@ -190,7 +212,7 @@ class RedisVectorClassifier:
             features['reading_time'],
             features['reactions_count'],
             features['comments_count'],
-            features['user_followers'],
+            user_followers if user_followers != -1 else 0, # Используем 0, если не удалось получить
             len(features['tags'])
         ], dtype=np.float32)
         
@@ -198,7 +220,7 @@ class RedisVectorClassifier:
         
         final_vector = np.concatenate([text_vector, numeric_features])
         
-        return final_vector.astype(np.float32)
+        return final_vector.astype(np.float32), features
 
     async def store_training_vector(self, post_id: int, vector: np.ndarray, label: int):
         """Сохранение вектора в Redis для обучения"""
@@ -260,7 +282,8 @@ class RediSearchClassifier:
         start_time = time.time()
         
         try:
-            query_vector = await self.redis_classifier.vectorize_post(post)
+            # Теперь получаем и вектор, и обновленные признаки
+            query_vector, features = await self.redis_classifier.vectorize_post(post)
             
             # Если Redis доступен, ищем похожие посты
             if self.redis_classifier.redis_client:
@@ -279,7 +302,7 @@ class RediSearchClassifier:
                         predicted_label = 1 if predicted_label_str == "spam" else 0
                         confidence = label_counts[predicted_label_str] / len(labels)
                         
-                        features = self.redis_classifier.create_features(post)
+                        # Используем уже готовые признаки
                         reasoning = self.redis_classifier.get_spam_indicators(features)
                         if not reasoning and predicted_label == 1:
                             reasoning = ["Similar to known spam posts (via Redis)"]
@@ -289,7 +312,7 @@ class RediSearchClassifier:
                         return predicted_label, confidence, reasoning
 
             # Запасной вариант, если Redis недоступен или похожих постов не найдено
-            features = self.redis_classifier.create_features(post)
+            # Используем признаки, полученные из vectorize_post
             spam_indicators = self.redis_classifier.get_spam_indicators(features)
             is_spam = len(spam_indicators) >= 3 # Более строгий порог без Redis
             confidence = 0.65 if is_spam else 0.6
