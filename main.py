@@ -86,32 +86,47 @@ class RedisVectorClassifier:
     async def init_redis(self):
         """Асинхронная инициализация Redis и создание индекса"""
         try:
-            self.redis_client = await aioredis.from_url(
-                "redis://localhost:6379",
-                decode_responses=False
+            # Добавляем таймаут, чтобы приложение не висело долго
+            self.redis_client = await asyncio.wait_for(
+                aioredis.from_url(
+                    "redis://localhost:6379",
+                    decode_responses=False
+                ),
+                timeout=2.0  # 2 секунды на подключение
             )
+            await self.redis_client.ping() # Проверяем, что соединение живое
             logger.info("Redis connection established")
             await self.create_index()
+        except (aioredis.exceptions.RedisError, asyncio.TimeoutError) as e:
+            logger.warning(f"Could not connect to Redis: {e}. Application will run in degraded mode (no Redis features).")
+            self.redis_client = None
         except Exception as e:
-            logger.error(f"Failed to connect to Redis or create index: {e}")
-            raise
+            logger.error(f"An unexpected error occurred during Redis initialization: {e}")
+            self.redis_client = None
 
     async def create_index(self):
         """Создание индекса RediSearch для векторов"""
+        if not self.redis_client:
+            return
         try:
             # Проверяем, существует ли индекс
             await self.redis_client.execute_command("FT.INFO", self.index_name)
             logger.info(f"Index '{self.index_name}' already exists.")
-        except aioredis.exceptions.ResponseError:
-            # Индекс не существует, создаем его
-            logger.info(f"Creating index '{self.index_name}'")
-            schema = (
-                "vector", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32", "DIM", str(self.vector_dim), "DISTANCE_METRIC", "L2",
-                "label", "TAG"
-            )
-            await self.redis_client.execute_command(
-                "FT.CREATE", self.index_name, "ON", "HASH", "PREFIX", "1", "post:", "SCHEMA", *schema
-            )
+        except aioredis.exceptions.ResponseError as e:
+            # Индекс не существует, создаем его, если ошибка об этом
+            if "Unknown Index name" in str(e):
+                logger.info(f"Index '{self.index_name}' not found. Creating it.")
+                schema = (
+                    "vector", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32", "DIM", str(self.vector_dim), "DISTANCE_METRIC", "L2",
+                    "label", "TAG"
+                )
+                await self.redis_client.execute_command(
+                    "FT.CREATE", self.index_name, "ON", "HASH", "PREFIX", "1", "post:", "SCHEMA", *schema
+                )
+            else:
+                # Если другая ошибка, то пробрасываем ее
+                logger.error(f"An unexpected Redis error occurred: {e}")
+                raise
 
     def preprocess_text(self, text: Optional[str]) -> str:
         """Очистка текста"""
@@ -187,6 +202,9 @@ class RedisVectorClassifier:
 
     async def store_training_vector(self, post_id: int, vector: np.ndarray, label: int):
         """Сохранение вектора в Redis для обучения"""
+        if not self.redis_client:
+            logger.warning("Redis is not available. Skipping vector storage.")
+            return
         try:
             post_key = f"post:{post_id}"
             await self.redis_client.hset(post_key, mapping={
@@ -200,6 +218,8 @@ class RedisVectorClassifier:
 
     async def find_similar_posts(self, query_vector: np.ndarray, k: int = 5) -> List[tuple]:
         """Поиск похожих постов"""
+        if not self.redis_client:
+            return []
         try:
             query = (
                 f"*=>[KNN {k} @vector $blob AS score]"
@@ -242,40 +262,42 @@ class RediSearchClassifier:
         try:
             query_vector = await self.redis_classifier.vectorize_post(post)
             
-            similar_posts = await self.redis_classifier.find_similar_posts(query_vector, self.k)
-            
-            if not similar_posts:
-                features = self.redis_classifier.create_features(post)
-                spam_indicators = self.redis_classifier.get_spam_indicators(features)
-                is_spam = len(spam_indicators) >= 2
-                confidence = 0.6 if is_spam else 0.7
+            # Если Redis доступен, ищем похожие посты
+            if self.redis_classifier.redis_client:
+                similar_posts = await self.redis_classifier.find_similar_posts(query_vector, self.k)
                 
-                processing_time = (time.time() - start_time) * 1000
-                return int(is_spam), confidence, spam_indicators
-            
-            labels = []
-            for post_id, score in similar_posts:
-                label = await self.redis_classifier.redis_client.hget(f"post:{post_id}", "label")
-                if label:
-                    labels.append(label.decode('utf-8'))
-            
-            if not labels:
-                return 0, 0.5, ["No training data available"]
-            
-            label_counts = Counter(labels)
-            predicted_label_str = label_counts.most_common(1)[0][0]
-            predicted_label = 1 if predicted_label_str == "spam" else 0
-            confidence = label_counts[predicted_label_str] / len(labels)
-            
+                if similar_posts:
+                    labels = []
+                    for post_id, score in similar_posts:
+                        label_bytes = await self.redis_classifier.redis_client.hget(f"post:{post_id}", "label")
+                        if label_bytes:
+                            labels.append(label_bytes.decode('utf-8'))
+                    
+                    if labels:
+                        label_counts = Counter(labels)
+                        predicted_label_str = label_counts.most_common(1)[0][0]
+                        predicted_label = 1 if predicted_label_str == "spam" else 0
+                        confidence = label_counts[predicted_label_str] / len(labels)
+                        
+                        features = self.redis_classifier.create_features(post)
+                        reasoning = self.redis_classifier.get_spam_indicators(features)
+                        if not reasoning and predicted_label == 1:
+                            reasoning = ["Similar to known spam posts (via Redis)"]
+                        elif not reasoning:
+                            reasoning = ["Similar to legitimate posts (via Redis)"]
+                        
+                        return predicted_label, confidence, reasoning
+
+            # Запасной вариант, если Redis недоступен или похожих постов не найдено
             features = self.redis_classifier.create_features(post)
-            reasoning = self.redis_classifier.get_spam_indicators(features)
-            if not reasoning and predicted_label == 1:
-                reasoning = ["Similar to known spam posts"]
-            elif not reasoning:
-                reasoning = ["Similar to legitimate posts"]
+            spam_indicators = self.redis_classifier.get_spam_indicators(features)
+            is_spam = len(spam_indicators) >= 3 # Более строгий порог без Redis
+            confidence = 0.65 if is_spam else 0.6
+            reasoning = spam_indicators if spam_indicators else ["Heuristic analysis based on post content."]
+            if not self.redis_classifier.redis_client:
+                reasoning.append("Redis is not connected, classification is based on heuristics only.")
             
-            processing_time = (time.time() - start_time) * 1000
-            return predicted_label, confidence, reasoning
+            return int(is_spam), confidence, reasoning
             
         except Exception as e:
             logger.error(f"Prediction failed: {e}")
@@ -330,6 +352,7 @@ async def root():
         </div>
         
         <div id="stats-container"></div>
+        <div id="redis-info-container"></div>
         <div id="posts-container"></div>
         
         <div id="pagination-controls" class="controls">
@@ -471,10 +494,43 @@ async def root():
                     console.error('Failed to load stats:', error);
                 }
             }
+
+            async function showRedisInfo() {
+                try {
+                    const response = await fetch('/redis-info');
+                    const redisInfo = await response.json();
+                    
+                    const redisInfoContainer = document.getElementById('redis-info-container');
+                    let content = '';
+                    if (redisInfo.status === 'disconnected') {
+                        content = `
+                        <div style="background: #fff3e0; padding: 15px; border-radius: 5px; margin: 10px 0; border: 1px solid #ff9800;">
+                            <h3>⚠️ Redis Info</h3>
+                            <p><strong>Status:</strong> Disconnected</p>
+                            <p>Advanced features like vector search are disabled.</p>
+                        </div>
+                        `;
+                    } else {
+                        content = `
+                        <div style="background: #e8f5e8; padding: 15px; border-radius: 5px; margin: 10px 0; border: 1px solid #4caf50;">
+                            <h3>ℹ️ Redis Info</h3>
+                            <p><strong>Redis Version:</strong> ${redisInfo.redis_version}</p>
+                            <p><strong>Vectors in DB:</strong> ${redisInfo.num_vectors}</p>
+                        </div>
+                        `;
+                    }
+                    redisInfoContainer.innerHTML = content;
+                } catch (error) {
+                    console.error('Failed to load Redis info:', error);
+                    const redisInfoContainer = document.getElementById('redis-info-container');
+                    redisInfoContainer.innerHTML = `<div style="color: red;">Error loading Redis info.</div>`;
+                }
+            }
             
             // Автоматически загружаем посты при загрузке страницы
             document.addEventListener('DOMContentLoaded', () => {
                 loadAndClassifyPosts(currentPage);
+                showRedisInfo();
             });
         </script>
     </body>
@@ -548,6 +604,8 @@ async def classify_batch(request: BatchClassificationRequest):
 @app.post("/feedback")
 async def moderator_feedback(feedback: ModeratorFeedback):
     """Обратная связь от модератора для улучшения модели"""
+    if not redis_classifier.redis_client:
+        raise HTTPException(status_code=503, detail="Redis is not available. Cannot record feedback.")
     try:
         # Сохраняем обратную связь
         feedback_key = f"feedback:{feedback.post_id}"
@@ -595,6 +653,12 @@ async def get_stats():
 @app.get("/health")
 async def health_check():
     """Проверка здоровья сервиса"""
+    if not redis_classifier.redis_client:
+        return {
+            "status": "healthy", # Приложение работает, но без Redis
+            "redis": "disconnected",
+            "timestamp": datetime.now().isoformat()
+        }
     try:
         # Проверяем соединение с Redis
         await redis_classifier.redis_client.ping()
@@ -609,9 +673,41 @@ async def health_check():
         logger.error(f"Health check failed: {e}")
         return {
             "status": "unhealthy",
+            "redis": "disconnected",
             "error": str(e),
             "timestamp": datetime.now().isoformat()
         }
+
+@app.get("/redis-info")
+async def get_redis_info():
+    """Получение информации о Redis"""
+    if not redis_classifier.redis_client:
+        return {
+            "redis_version": "N/A",
+            "num_vectors": "N/A",
+            "status": "disconnected"
+        }
+    try:
+        info = await redis_classifier.redis_client.info()
+        num_vectors = 0
+        try:
+            index_info = await redis_classifier.redis_client.execute_command("FT.INFO", redis_classifier.index_name)
+            # Преобразуем список в словарь для удобного доступа
+            index_info_dict = {index_info[i]: index_info[i+1] for i in range(0, len(index_info), 2)}
+            num_vectors = index_info_dict.get(b'num_docs', 0)
+        except aioredis.exceptions.ResponseError as e:
+            if "Unknown Index name" not in str(e):
+                raise # Пробрасываем неожиданные ошибки
+            # Если индекс не найден, количество векторов равно 0
+
+        return {
+            "redis_version": info.get("redis_version"),
+            "num_vectors": num_vectors,
+            "status": "connected"
+        }
+    except Exception as e:
+        logger.error(f"Failed to get Redis info: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get Redis info")
 
 if __name__ == "__main__":
     uvicorn.run(
