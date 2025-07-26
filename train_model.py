@@ -214,7 +214,11 @@ class ModelTrainer:
                 })
                 
                 # Генерируем метку
-                label = self.label_generator.generate_label(article)
+                # Если пост из нашего датасета, он точно спам
+                if article.get("is_known_spam"):
+                    label = 1
+                else:
+                    label = self.label_generator.generate_label(article)
                 
                 training_data.append((post, label))
                 
@@ -312,19 +316,30 @@ async def main(classifier: RedisVectorClassifier):
         logger.error("Redis is not available. The training process cannot continue without a Redis connection.")
         return
     
-    # Сбор данных
+    # Сбор данных с dev.to
     async with DevToDataCollector() as collector:
         logger.info("Collecting training data from dev.to")
         articles = await collector.collect_training_data(num_pages=30)
     
+    # Загрузка локального датасета со спамом
+    try:
+        with open('spam_dataset.json', 'r', encoding='utf-8') as f:
+            spam_articles = json.load(f)
+            logger.info(f"Loaded {len(spam_articles)} articles from local spam dataset.")
+            articles.extend(spam_articles)
+    except FileNotFoundError:
+        logger.warning("spam_dataset.json not found, continuing without it.")
+    except json.JSONDecodeError:
+        logger.error("Failed to decode spam_dataset.json. Please check the file format.")
+
     if not articles:
-        logger.error("No articles collected, exiting")
+        logger.error("No articles collected or loaded, exiting")
         return
     
     # Удаляем дубликаты
     unique_articles = {article['id']: article for article in articles}.values()
     articles = list(unique_articles)
-    logger.info(f"Using {len(articles)} unique articles")
+    logger.info(f"Using {len(articles)} unique articles in total")
     
     # Подготовка данных
     training_data = await trainer.prepare_training_data(articles)
@@ -370,8 +385,7 @@ async def main(classifier: RedisVectorClassifier):
     logger.info("Results saved to training_results.json")
 
 if __name__ == "__main__":
-    # Этот блок больше не будет выполняться при импорте
-    # Для запуска из командной строки потребуется отдельный скрипт
-    # или изменение логики в main.py для передачи классификатора
-    pass
+    # Создаем экземпляр классификатора и запускаем обучение
+    redis_classifier = RedisVectorClassifier()
+    asyncio.run(main(redis_classifier))
 

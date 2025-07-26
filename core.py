@@ -55,7 +55,7 @@ class RedisVectorClassifier:
     def __init__(self):
         self.redis_client = None
         self.model = SentenceTransformer('all-MiniLM-L6-v2')
-        self.vector_dim = 384 + 5  # размерность эмбеддинга + числовые признаки
+        self.vector_dim = 384 + 3  # размерность эмбеддинга + 3 числовых признака
         self.index_name = "post_vectors"
 
     async def init_redis(self):
@@ -185,8 +185,6 @@ class RedisVectorClassifier:
         
         numeric_features = np.array([
             features['reading_time'],
-            features['reactions_count'],
-            features['comments_count'],
             user_followers if user_followers != -1 else 0, # Используем 0, если не удалось получить
             len(features['tags'])
         ], dtype=np.float32)
