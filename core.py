@@ -252,7 +252,7 @@ class RedisVectorClassifier:
 
 
 class RediSearchClassifier:
-    def __init__(self, redis_classifier: RedisVectorClassifier, k: int = 5):
+    def __init__(self, redis_classifier: RedisVectorClassifier, k: int = 9):
         self.redis_classifier = redis_classifier
         self.k = k
     
