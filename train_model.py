@@ -11,7 +11,7 @@ import logging
 from typing import List, Dict, Any
 from datetime import datetime, timedelta
 import numpy as np
-from main import RedisVectorClassifier, DevToPost
+from main import redis_classifier, DevToPost
 import time
 import random
 
@@ -190,7 +190,7 @@ class SpamLabelGenerator:
 
 class ModelTrainer:
     def __init__(self):
-        self.redis_classifier = RedisVectorClassifier()
+        self.redis_classifier = redis_classifier
         self.label_generator = SpamLabelGenerator()
     
     async def prepare_training_data(self, articles: List[Dict]) -> List[tuple]:
@@ -236,7 +236,7 @@ class ModelTrainer:
         for post, label in training_data:
             try:
                 # Векторизуем пост
-                vector = await self.redis_classifier.vectorize_post(post)
+                vector, _ = await self.redis_classifier.vectorize_post(post)
                 
                 # Сохраняем в Redis
                 await self.redis_classifier.store_training_vector(post.id, vector, label)
@@ -306,6 +306,13 @@ class ModelTrainer:
 async def main():
     """Основная функция обучения"""
     logger.info("Starting model training process")
+
+    trainer = ModelTrainer()
+    await trainer.redis_classifier.init_redis()
+
+    if not trainer.redis_classifier.redis_client:
+        logger.error("Redis is not available. The training process cannot continue without a Redis connection.")
+        return
     
     # Сбор данных
     async with DevToDataCollector() as collector:
@@ -322,7 +329,6 @@ async def main():
     logger.info(f"Using {len(articles)} unique articles")
     
     # Подготовка данных
-    trainer = ModelTrainer()
     training_data = await trainer.prepare_training_data(articles)
     
     if not training_data:

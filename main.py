@@ -114,7 +114,7 @@ class RedisVectorClassifier:
             logger.info(f"Index '{self.index_name}' already exists.")
         except aioredis.exceptions.ResponseError as e:
             # Индекс не существует, создаем его, если ошибка об этом
-            if "Unknown Index name" in str(e):
+            if "Unknown Index name" in str(e) or "no such index" in str(e):
                 logger.info(f"Index '{self.index_name}' not found. Creating it.")
                 schema = (
                     "vector", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32", "DIM", str(self.vector_dim), "DISTANCE_METRIC", "L2",
@@ -251,18 +251,23 @@ class RedisVectorClassifier:
             )
             
             similar_posts = []
-            # The first result is the total number of documents, so we skip it.
-            for i in range(1, len(results)):
-                doc = results[i]
-                if isinstance(doc, list):
-                    post_id = doc[0].decode('utf-8').split(':')[-1]
-                    # The score is in the field list, after the 'score' key
-                    try:
-                        score_index = doc[1].index(b'score') + 1
-                        score = float(doc[1][score_index])
-                        similar_posts.append((post_id, score))
-                    except (ValueError, IndexError):
-                        continue
+            # The response is a list: [count, doc1, [fields1], doc2, [fields2], ...]
+            # We iterate through the documents, skipping the count at the beginning.
+            for i in range(1, len(results), 2):
+                try:
+                    # post_key is like b'post:12345'
+                    post_key = results[i]
+                    post_id = post_key.decode('utf-8').split(':')[-1]
+                    
+                    # fields is a list like [b'score', b'0.123']
+                    fields = results[i+1]
+                    score_index = fields.index(b'score') + 1
+                    score = float(fields[score_index])
+                    
+                    similar_posts.append((post_id, score))
+                except (ValueError, IndexError, AttributeError) as e:
+                    logger.warning(f"Could not parse a result from Redis search: {e}. Result item: {results[i]}")
+                    continue
             
             return similar_posts
             
@@ -288,6 +293,7 @@ class RediSearchClassifier:
             # Если Redis доступен, ищем похожие посты
             if self.redis_classifier.redis_client:
                 similar_posts = await self.redis_classifier.find_similar_posts(query_vector, self.k)
+                logger.info(f"Found {len(similar_posts)} similar posts in Redis for post {post.id}")
                 
                 if similar_posts:
                     labels = []
@@ -302,12 +308,15 @@ class RediSearchClassifier:
                         predicted_label = 1 if predicted_label_str == "spam" else 0
                         confidence = label_counts[predicted_label_str] / len(labels)
                         
-                        # Используем уже готовые признаки
-                        reasoning = self.redis_classifier.get_spam_indicators(features)
-                        if not reasoning and predicted_label == 1:
+                        # Логика для формирования развернутого ответа
+                        if predicted_label == 1:
                             reasoning = ["Similar to known spam posts (via Redis)"]
-                        elif not reasoning:
+                        else:
                             reasoning = ["Similar to legitimate posts (via Redis)"]
+                        
+                        # Добавляем эвристические индикаторы как дополнительную информацию
+                        heuristic_indicators = self.redis_classifier.get_spam_indicators(features)
+                        reasoning.extend(heuristic_indicators)
                         
                         return predicted_label, confidence, reasoning
 
