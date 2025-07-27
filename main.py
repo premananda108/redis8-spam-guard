@@ -8,9 +8,9 @@ import logging
 import uvicorn
 from train_model import main as run_training
 from core import (
-    DevToPost, ClassificationResult, ModeratorFeedback, 
+    DevToPost, ClassificationResult, ModeratorFeedback,
     BatchClassificationRequest, StatsResponse,
-    RedisVectorClassifier, RediSearchClassifier
+    RedisVectorClassifier, RediSearchClassifier, SimilarPostInfo
 )
 
 # Настройка логирования
@@ -84,7 +84,7 @@ async def classify_post(post: DevToPost):
     start_time = time.time()
     
     try:
-        prediction, confidence, reasoning, similar_post_ids = await classifier.predict(post)
+        prediction, confidence, reasoning, similar_posts_data = await classifier.predict(post)
         
         # Определяем рекомендацию
         if confidence >= 0.8:
@@ -94,6 +94,16 @@ async def classify_post(post: DevToPost):
         
         processing_time = (time.time() - start_time) * 1000
         
+        # Преобразуем данные о похожих постах в Pydantic модели
+        similar_posts = [
+            SimilarPostInfo(
+                post_id=p.get('post_id'), 
+                title=p.get('title'), 
+                url=p.get('url'), 
+                score=p.get('score')
+            ) for p in similar_posts_data
+        ]
+
         result = ClassificationResult(
             post_id=post.id,
             is_spam=bool(prediction),
@@ -101,7 +111,7 @@ async def classify_post(post: DevToPost):
             recommendation=recommendation,
             reasoning=reasoning,
             processing_time_ms=processing_time,
-            similar_post_ids=similar_post_ids
+            similar_posts=similar_posts
         )
         
         # Асинхронно обновляем статистику в Redis

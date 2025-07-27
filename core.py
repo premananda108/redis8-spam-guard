@@ -38,6 +38,12 @@ class DevToPost(BaseModel):
     url: Optional[str] = None
     published_at: Optional[str] = None
 
+class SimilarPostInfo(BaseModel):
+    post_id: str
+    title: str
+    url: str
+    score: float
+
 class ClassificationResult(BaseModel):
     post_id: int
     is_spam: bool
@@ -45,7 +51,7 @@ class ClassificationResult(BaseModel):
     recommendation: str
     reasoning: List[str] = []
     processing_time_ms: float
-    similar_post_ids: List[str] = []
+    similar_posts: List[SimilarPostInfo] = []
 
 class ModeratorFeedback(BaseModel):
     post_id: int
@@ -315,7 +321,7 @@ class RediSearchClassifier:
                         heuristic_indicators = self.redis_classifier.get_spam_indicators(features)
                         reasoning.extend(heuristic_indicators)
                         
-                        return predicted_label, confidence, reasoning, similar_post_ids
+                        return predicted_label, confidence, reasoning, similar_posts
 
             # Запасной вариант, если Redis недоступен или похожих постов не найдено
             # Используем признаки, полученные из vectorize_post
