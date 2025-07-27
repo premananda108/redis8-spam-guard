@@ -318,7 +318,7 @@ class QueueLogHandler(logging.Handler):
     def emit(self, record):
         self.queue.put_nowait(self.format(record))
 
-async def main(classifier: RedisVectorClassifier):
+async def main(classifier: Optional[RedisVectorClassifier] = None):
     """Основная функция обучения"""
     # Настройка логирования в файл
     log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
@@ -330,6 +330,9 @@ async def main(classifier: RedisVectorClassifier):
     root_logger.setLevel(logging.INFO)
 
     logger.info("Starting model training process")
+
+    if classifier is None:
+        classifier = RedisVectorClassifier()
 
     trainer = ModelTrainer(classifier)
     await trainer.redis_classifier.init_redis()

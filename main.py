@@ -456,7 +456,7 @@ async def trigger_training(background_tasks: BackgroundTasks):
     logger.info("Received request to start model training.")
     
     # Запускаем обучение в фоновой задаче, передавая существующий классификатор
-    background_tasks.add_task(run_training, redis_classifier)
+    background_tasks.add_task(run_training, classifier=redis_classifier)
     
     return {"message": "Model training started in the background. Check logs for progress."}
 

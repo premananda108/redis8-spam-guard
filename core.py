@@ -10,6 +10,17 @@ import aioredis
 import requests
 from collections import Counter
 
+# --- Singleton for SentenceTransformer Model ---
+class ModelSingleton:
+    _instance = None
+
+    @classmethod
+    def get_instance(cls):
+        if cls._instance is None:
+            logging.info("Loading SentenceTransformer model for the first time...")
+            cls._instance = SentenceTransformer('all-MiniLM-L6-v2')
+        return cls._instance
+
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -54,9 +65,9 @@ class StatsResponse(BaseModel):
 class RedisVectorClassifier:
     def __init__(self):
         self.redis_client = None
-        self.model = SentenceTransformer('all-MiniLM-L6-v2')
-        self.vector_dim = 384 + 3  # размерность эмбеддинга + 3 числовых признака
-        self.index_name = "post_vectors"
+        self.model = ModelSingleton.get_instance()  # Используем синглтон
+        self.vector_dim = 384 + 3
+        self.index_name = "post_vectors"''
 
     async def init_redis(self):
         """Асинхронная инициализация Redis и создание индекса"""
