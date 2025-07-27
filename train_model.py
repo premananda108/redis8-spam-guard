@@ -243,7 +243,7 @@ class ModelTrainer:
                 vector, _ = await self.redis_classifier.vectorize_post(post)
                 
                 # Сохраняем в Redis
-                await self.redis_classifier.store_training_vector(post.id, vector, label)
+                await self.redis_classifier.store_training_vector(post.id, vector, label, post.title, post.url)
                 
                 if label == 1:
                     spam_count += 1
@@ -272,7 +272,7 @@ class ModelTrainer:
         
         for post, true_label in test_data:
             try:
-                predicted_label, confidence, _ = await classifier.predict(post)
+                predicted_label, confidence, _, _ = await classifier.predict(post)
                 
                 if true_label == 1 and predicted_label == 1:
                     true_positives += 1

@@ -105,7 +105,9 @@ class RedisVectorClassifier:
                 logger.info(f"Index '{self.index_name}' not found. Creating it.")
                 schema = (
                     "vector", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32", "DIM", str(self.vector_dim), "DISTANCE_METRIC", "L2",
-                    "label", "TAG"
+                    "label", "TAG",
+                    "title", "TEXT", 
+                    "url", "TAG"
                 )
                 await self.redis_client.execute_command(
                     "FT.CREATE", self.index_name, "ON", "HASH", "PREFIX", "1", "post:", "SCHEMA", *schema
@@ -207,7 +209,7 @@ class RedisVectorClassifier:
         
         return final_vector.astype(np.float32), features
 
-    async def store_training_vector(self, post_id: int, vector: np.ndarray, label: int):
+    async def store_training_vector(self, post_id: int, vector: np.ndarray, label: int, title: str, url: str):
         """Сохранение вектора в Redis для обучения"""
         if not self.redis_client:
             logger.warning("Redis is not available. Skipping vector storage.")
@@ -216,14 +218,16 @@ class RedisVectorClassifier:
             post_key = f"post:{post_id}"
             await self.redis_client.hset(post_key, mapping={
                 "vector": vector.tobytes(),
-                "label": "spam" if label == 1 else "not_spam"
+                "label": "spam" if label == 1 else "not_spam",
+                "title": title or "",
+                "url": url or ""
             })
             logger.info(f"Stored training vector for post {post_id}")
         except Exception as e:
             logger.error(f"Failed to store training vector: {e}")
             raise
 
-    async def find_similar_posts(self, query_vector: np.ndarray, k: int = 5) -> List[tuple]:
+    async def find_similar_posts(self, query_vector: np.ndarray, k: int = 5) -> List[Dict[str, Any]]:
         """Поиск похожих постов"""
         if not self.redis_client:
             return []
@@ -232,7 +236,7 @@ class RedisVectorClassifier:
                 f"*=>[KNN {k} @vector $blob AS score]"
             )
             results = await self.redis_client.execute_command(
-                "FT.SEARCH", self.index_name, query, "PARAMS", "2", "blob", query_vector.tobytes(), "DIALECT", "2"
+                "FT.SEARCH", self.index_name, query, "PARAMS", "2", "blob", query_vector.tobytes(), "DIALECT", "2", "RETURN", "3", "score", "title", "url"
             )
             
             similar_posts = []
@@ -240,17 +244,22 @@ class RedisVectorClassifier:
             # We iterate through the documents, skipping the count at the beginning.
             for i in range(1, len(results), 2):
                 try:
-                    # post_key is like b'post:12345'
-                    post_key = results[i]
-                    post_id = post_key.decode('utf-8').split(':')[-1]
+                    post_key = results[i].decode('utf-8')
+                    post_id = post_key.split(':')[-1]
                     
-                    # fields is a list like [b'score', b'0.123']
                     fields = results[i+1]
-                    score_index = fields.index(b'score') + 1
-                    score = float(fields[score_index])
                     
-                    similar_posts.append((post_id, score))
-                except (ValueError, IndexError, AttributeError) as e:
+                    # Создаем словарь из полей для удобного доступа
+                    fields_dict = {fields[j].decode('utf-8'): fields[j+1].decode('utf-8') for j in range(0, len(fields), 2)}
+                    
+                    similar_posts.append({
+                        "post_id": post_id,
+                        "score": float(fields_dict.get('score', 0.0)),
+                        "title": fields_dict.get('title', 'No Title'),
+                        "url": fields_dict.get('url', '')
+                    })
+
+                except (ValueError, IndexError, AttributeError, UnicodeDecodeError) as e:
                     logger.warning(f"Could not parse a result from Redis search: {e}. Result item: {results[i]}")
                     continue
             
@@ -283,10 +292,10 @@ class RediSearchClassifier:
                 logger.info(f"Found {len(similar_posts)} similar posts in Redis for post {post.id}")
                 
                 if similar_posts:
-                    similar_post_ids = [post_id for post_id, score in similar_posts]
+                    similar_post_ids = [p['post_id'] for p in similar_posts]
                     labels = []
-                    for post_id, score in similar_posts:
-                        label_bytes = await self.redis_classifier.redis_client.hget(f"post:{post_id}", "label")
+                    for post_data in similar_posts:
+                        label_bytes = await self.redis_classifier.redis_client.hget(f"post:{post_data['post_id']}", "label")
                         if label_bytes:
                             labels.append(label_bytes.decode('utf-8'))
                     
