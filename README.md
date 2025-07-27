@@ -62,7 +62,7 @@ venc\Scripts\activate  # Windows
 pip install -r requirements.txt
 
 # Запустите Redis 8 в Docker
-docker run -d -p 6379:6379 redis/redis-stack:latest
+docker run -d --name redis8-spam-guard -p 6379:6379 redis:8.0.3-bookworm
 
 # Запустите приложение
 uvicorn main:app --reload

@@ -45,6 +45,7 @@ class ClassificationResult(BaseModel):
     recommendation: str
     reasoning: List[str] = []
     processing_time_ms: float
+    similar_post_ids: List[str] = []
 
 class ModeratorFeedback(BaseModel):
     post_id: int
@@ -265,7 +266,7 @@ class RediSearchClassifier:
         self.redis_classifier = redis_classifier
         self.k = k
     
-    async def predict(self, post: DevToPost) -> tuple[int, float, List[str]]:
+    async def predict(self, post: DevToPost) -> tuple[int, float, List[str], List[str]]:
         """Предсказание класса поста"""
         import time
         start_time = time.time()
@@ -274,12 +275,15 @@ class RediSearchClassifier:
             # Теперь получаем и вектор, и обновленные признаки
             query_vector, features = await self.redis_classifier.vectorize_post(post)
             
+            similar_post_ids = []
+
             # Если Redis доступен, ищем похожие посты
             if self.redis_classifier.redis_client:
                 similar_posts = await self.redis_classifier.find_similar_posts(query_vector, self.k)
                 logger.info(f"Found {len(similar_posts)} similar posts in Redis for post {post.id}")
                 
                 if similar_posts:
+                    similar_post_ids = [post_id for post_id, score in similar_posts]
                     labels = []
                     for post_id, score in similar_posts:
                         label_bytes = await self.redis_classifier.redis_client.hget(f"post:{post_id}", "label")
@@ -302,7 +306,7 @@ class RediSearchClassifier:
                         heuristic_indicators = self.redis_classifier.get_spam_indicators(features)
                         reasoning.extend(heuristic_indicators)
                         
-                        return predicted_label, confidence, reasoning
+                        return predicted_label, confidence, reasoning, similar_post_ids
 
             # Запасной вариант, если Redis недоступен или похожих постов не найдено
             # Используем признаки, полученные из vectorize_post
@@ -327,8 +331,8 @@ class RediSearchClassifier:
             if not self.redis_classifier.redis_client:
                 reasoning.append("Redis is not connected, classification is based on heuristics only.")
             
-            return int(is_spam), confidence, reasoning
+            return int(is_spam), confidence, reasoning, []
             
         except Exception as e:
             logger.error(f"Prediction failed: {e}")
-            return 0, 0.5, [f"Error during prediction: {str(e)}"]
+            return 0, 0.5, [f"Error during prediction: {str(e)}"], []

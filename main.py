@@ -197,6 +197,17 @@ async def root():
                         'approve': '✅'
                     }[classification.recommendation] || '❓';
                     
+                    const similarPostsHtml = classification.similar_post_ids && classification.similar_post_ids.length > 0
+                        ? `
+                        <div class="reasoning">
+                            <strong>🔗 Similar to posts:</strong>
+                            <ul>
+                                ${classification.similar_post_ids.map(id => `<li><a href="https://dev.to/api/articles/${id}" target="_blank">${id}</a></li>`).join('')}
+                            </ul>
+                        </div>
+                        `
+                        : '';
+
                     postElement.innerHTML = `
                         <h3>Diagnosis Result</h3>
                         <div>
@@ -213,6 +224,7 @@ async def root():
                                 <ul>${classification.reasoning.map(r => `<li>${r}</li>`).join('')}</ul>
                             </div>
                         ` : ''}
+                        ${similarPostsHtml}
                     `;
                     resultContainer.appendChild(postElement);
 
@@ -476,7 +488,7 @@ async def classify_post(post: DevToPost):
     start_time = time.time()
     
     try:
-        prediction, confidence, reasoning = await classifier.predict(post)
+        prediction, confidence, reasoning, similar_post_ids = await classifier.predict(post)
         
         # Определяем рекомендацию
         if confidence >= 0.8:
@@ -492,7 +504,8 @@ async def classify_post(post: DevToPost):
             confidence=confidence,
             recommendation=recommendation,
             reasoning=reasoning,
-            processing_time_ms=processing_time
+            processing_time_ms=processing_time,
+            similar_post_ids=similar_post_ids
         )
         
         # Асинхронно обновляем статистику в Redis
@@ -679,7 +692,7 @@ async def get_redis_info():
 if __name__ == "__main__":
     uvicorn.run(
         "main:app", 
-        host="0.0.0.0", 
+        host="127.0.0.1",
         port=8000, 
         reload=False,
         log_level="info"
