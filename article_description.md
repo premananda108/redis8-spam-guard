@@ -17,13 +17,13 @@ Here’s what happens behind the scenes when a user clicks the "Load Latest Post
 2.  **Analysis Request:** Each post is then sent to the backend server, hitting the `/classify` API endpoint.
 
 3.  **Feature Extraction (in `main.py`):**
-    *   The system extracts key pieces of information from the post data: the title, description, tags, reading time, reaction and comment counts, and the author's follower count.
+    *   The system extracts key pieces of information from the post data: the title, description, tags, reading time, and the author's follower count. Reaction and comment counts are also extracted for heuristic analysis.
     *   The text is sanitized using the `preprocess_text` function, which strips out HTML tags, URLs, and extra whitespace.
 
 4.  **Vectorization (The Magic Step):** This is where the post is transformed into its "digital fingerprint."
     *   **Text to Numbers:** The cleaned text (a combination of the title and description) is fed into the `SentenceTransformer` model (`all-MiniLM-L6-v2`). This sophisticated model acts as the system's "brain," converting the semantic meaning of the text into a high-dimensional numerical vector (an array of 384 numbers). Texts with similar meanings will result in vectors that are mathematically close to each other.
-    *   **Metadata to Numbers:** Other numerical data (likes, comments, etc.) are formed into a smaller vector (5 numbers), normalized, and then concatenated with the text vector.
-    *   The final result is a **single, unified vector** (389 dimensions) that represents the core characteristics of the post.
+    *   **Metadata to Numbers:** Other numerical data (reading time, author's follower count, number of tags) are formed into a smaller vector (3 numbers), normalized, and then concatenated with the text vector. Importantly, reaction and comment counts are *excluded* from this vector to ensure fair comparison with new posts that have no engagement history.
+    *   The final result is a **single, unified vector** (387 dimensions) that represents the core characteristics of the post.
 
 5.  **Similarity Search in Redis:**
     *   The system takes this newly generated vector and sends a query to the **Redis database**.
@@ -36,7 +36,7 @@ Here’s what happens behind the scenes when a user clicks the "Load Latest Post
 
 7.  **Heuristics (The Fallback Plan):** If the Redis database is empty (i.e., the model hasn't been trained yet), the system falls back on a set of simple, rule-based checks (heuristics). It looks for common spam keywords (e.g., "buy now," "earn money"), checks if the post has suspiciously low engagement, etc.
 
-8.  **The Response:** The server sends the final verdict back to the web interface. This includes the classification (spam/not spam), the confidence level, and the reasoning behind the decision (e.g., "Similar to known spam posts" or "Contains spam keywords").
+8.  **The Response:** The server sends the final verdict back to the web interface. This includes the classification (spam/not spam), the confidence level, the reasoning behind the decision (e.g., "Similar to known spam posts" or "Contains spam keywords"), and a list of similar posts with their titles and URLs.
 
 ## Key Technologies
 
