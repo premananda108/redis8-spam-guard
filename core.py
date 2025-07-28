@@ -45,13 +45,16 @@ class SimilarPostInfo(BaseModel):
     score: float
 
 class ClassificationResult(BaseModel):
+    """Результат классификации поста."""
     post_id: int
     is_spam: bool
-    confidence: float = Field(..., ge=0.0, le=1.0)
+    confidence: float
     recommendation: str
-    reasoning: List[str] = []
+    reasoning: List[str]
     processing_time_ms: float
     similar_posts: List[SimilarPostInfo] = []
+    moderator_verdict: Optional[str] = None  # 'spam', 'legit', or None
+
 
 class ModeratorFeedback(BaseModel):
     post_id: int

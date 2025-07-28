@@ -104,6 +104,15 @@ async def classify_post(post: DevToPost):
             ) for p in similar_posts_data
         ]
 
+        # Проверяем наличие обратной связи от модератора
+        moderator_verdict = None
+        if redis_classifier.redis_client:
+            feedback_key = f"feedback:{post.id}"
+            feedback_data = await redis_classifier.redis_client.get(feedback_key)
+            if feedback_data:
+                feedback_json = json.loads(feedback_data)
+                moderator_verdict = "spam" if feedback_json.get("is_spam") else "legit"
+
         result = ClassificationResult(
             post_id=post.id,
             is_spam=bool(prediction),
@@ -111,7 +120,8 @@ async def classify_post(post: DevToPost):
             recommendation=recommendation,
             reasoning=reasoning,
             processing_time_ms=processing_time,
-            similar_posts=similar_posts
+            similar_posts=similar_posts,
+            moderator_verdict=moderator_verdict
         )
         
         # Асинхронно обновляем статистику в Redis

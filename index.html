@@ -25,23 +25,19 @@
     </style>
 </head>
 <body>
-    <div class="main-content">
+    <div class="main-content" id="moderation-view">
         <h1>🚀 Dev.to Post Moderator Assistant</h1>
         <p>AI-powered spam detection using Redis 8 Vector Sets</p>
         
         <div class="controls">
             <button onclick="resetAndLoad()">🔄 Load Latest Posts</button>
             <button onclick="showStats()">📊 Show Statistics</button>
-            <button id="train-button" onclick="startTraining()">🚀 Train Model</button>
+            <button id="train-button" onclick="showTrainingView()">🚀 Train Model</button>
         </div>
         
         <div id="stats-container"></div>
         <div id="redis-info-container"></div>
-        <div id="log-container-wrapper" style="display: none;">
-            <h3>🎓 Training Logs</h3>
-            <button onclick="refreshLogs()">🔄 Refresh Logs</button>
-            <pre id="log-container"></pre>
-        </div>
+        
         <div id="posts-container"></div>
         
         <div id="pagination-controls" class="controls">
@@ -50,6 +46,25 @@
             <button id="next-button" onclick="nextPage()">Next ➡️</button>
         </div>
     </div>
+
+    <div class="main-content" id="training-view" style="display: none;">
+        <h1>🎓 Model Training Dashboard</h1>
+        <p>Review current model statistics before starting a new training cycle.</p>
+        
+        <div id="current-model-stats" style="background: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
+            <p>Loading current model info...</p>
+        </div>
+
+        <div class="controls">
+            <button id="start-training-btn" onclick="executeTraining()">🚀 Start New Training</button>
+            <button onclick="switchView('moderation')">⬅️ Back to Moderation</button>
+        </div>
+
+        <h3>📜 Training Logs</h3>
+        <button onclick="refreshLogs()">🔄 Refresh Logs</button>
+        <pre id="log-container">Logs will appear here once training starts.</pre>
+    </div>
+
 
     <div class="sidebar">
         <div class="manual-check-form">
@@ -88,6 +103,19 @@
         let currentPage = 1;
         const postsPerPage = 10;
 
+        function switchView(viewName) {
+            const moderationView = document.getElementById('moderation-view');
+            const trainingView = document.getElementById('training-view');
+
+            if (viewName === 'training') {
+                moderationView.style.display = 'none';
+                trainingView.style.display = 'block';
+            } else { // moderation
+                moderationView.style.display = 'block';
+                trainingView.style.display = 'none';
+            }
+        }
+
         async function sendFeedback(postId, isSpam, buttonElement) {
             try {
                 const response = await fetch('/feedback', {
@@ -96,14 +124,13 @@
                     body: JSON.stringify({
                         post_id: postId,
                         is_spam: isSpam,
-                        moderator_id: "moderator-007" // В будущем можно заменить на ID авторизованного пользователя
+                        moderator_id: "moderator-007"
                     })
                 });
                 if (!response.ok) {
                     const error = await response.json();
                     throw new Error(error.detail || 'Failed to send feedback');
                 }
-                // Визуально подтверждаем действие
                 buttonElement.parentElement.innerHTML = '<strong>✅ Thank you for your feedback!</strong>';
             } catch (error) {
                 alert(`Error sending feedback: ${error.message}`);
@@ -134,7 +161,7 @@
             resultContainer.innerHTML = '';
 
             const postData = {
-                id: Math.floor(Math.random() * 1000000), // Fake ID
+                id: Math.floor(Math.random() * 1000000),
                 title: document.getElementById('manual-title').value,
                 description: document.getElementById('manual-description').value,
                 tag_list: document.getElementById('manual-tags').value.split(',').map(t => t.trim()),
@@ -142,8 +169,7 @@
                 comments_count: parseInt(document.getElementById('manual-comments').value) || 0,
                 reading_time_minutes: parseInt(document.getElementById('manual-reading-time').value) || 0,
                 user: {
-                    // We need to simulate the user object for the backend
-                    id: Math.floor(Math.random() * 100000), // Fake user ID
+                    id: Math.floor(Math.random() * 100000),
                     followers_count: parseInt(document.getElementById('manual-followers').value) || 0
                 }
             };
@@ -261,6 +287,18 @@
                             `
                             : '';
 
+                        let feedbackHtml = '';
+                        if (classification.moderator_verdict) {
+                            const verdictText = classification.moderator_verdict === 'spam' ? 'SPAM' : 'LEGITIMATE';
+                            feedbackHtml = `<strong style="color: #388e3c;">✅ Reviewed as: ${verdictText}</strong>`;
+                        } else {
+                            feedbackHtml = `
+                                <span>Is this classification wrong?</span>
+                                <button onclick="sendFeedback(${post.id}, true, this)">Mark as SPAM</button>
+                                <button onclick="sendFeedback(${post.id}, false, this)">Mark as LEGITIMATE</button>
+                            `;
+                        }
+
                         postElement.innerHTML = `
                             <h3><a href="${post.url}" target="_blank">${post.title}</a></h3>
                             <p>${post.description || 'No description'}</p>
@@ -283,10 +321,8 @@
                                 </div>
                             ` : ''}
                             ${similarPostsHtml}
-                            <div class="feedback-controls" style="margin-top: 10px;">
-                                <span>Is this classification wrong?</span>
-                                <button onclick="sendFeedback(${post.id}, true, this)">Mark as SPAM</button>
-                                <button onclick="sendFeedback(${post.id}, false, this)">Mark as LEGITIMATE</button>
+                            <div class="feedback-container" style="margin-top: 10px;">
+                                ${feedbackHtml}
                             </div>
                         `;
                     } catch (error) {
@@ -311,7 +347,7 @@
         }
 
         function resetAndLoad() {
-            document.getElementById('stats-container').innerHTML = ''; // Скрываем статистику
+            document.getElementById('stats-container').innerHTML = '';
             switchView('moderation');
             currentPage = 1;
             loadAndClassifyPosts(currentPage);
@@ -372,66 +408,86 @@
             }
         }
 
-        async function startTraining() {
-            document.getElementById('stats-container').innerHTML = ''; // Скрываем статистику
+        async function showTrainingView() {
             switchView('training');
-            const trainButton = document.getElementById('train-button');
+            const statsContainer = document.getElementById('current-model-stats');
+            statsContainer.innerHTML = '<p>Loading current model info...</p>';
+
+            try {
+                const [statsRes, redisInfoRes] = await Promise.all([
+                    fetch('/stats'),
+                    fetch('/redis-info')
+                ]);
+
+                if (!statsRes.ok || !redisInfoRes.ok) {
+                    throw new Error('Failed to fetch model information.');
+                }
+
+                const stats = await statsRes.json();
+                const redisInfo = await redisInfoRes.json();
+
+                const accuracy_text = stats.accuracy ? `${(stats.accuracy * 100).toFixed(2)}%` : 'Not available';
+                const vector_count = redisInfo.num_vectors !== undefined ? redisInfo.num_vectors : 'Not available';
+                
+                statsContainer.innerHTML = `
+                    <p><strong>Current Model Accuracy (from last training):</strong> ${accuracy_text}</p>
+                    <p><strong>Trained Examples (Vectors in DB):</strong> ${vector_count}</p>
+                    <hr>
+                    <p>Clicking 'Start New Training' will delete all existing trained data and rebuild the model using the <code>spam_dataset.json</code> file.</p>
+                `;
+            } catch (error) {
+                statsContainer.innerHTML = `<p style="color: red;">Could not load model info: ${error.message}</p>`;
+            }
+        }
+
+        async function executeTraining() {
+            const trainButton = document.getElementById('start-training-btn');
+            const logContainer = document.getElementById('log-container');
             
             trainButton.disabled = true;
             trainButton.textContent = '👨‍🏫 Training in progress...';
-            await refreshLogs();
+            logContainer.textContent = 'Requesting to start training...';
+            
+            // Start polling for logs
+            const logInterval = setInterval(refreshLogs, 2000);
 
             try {
                 const response = await fetch('/train', { method: 'POST' });
                 const result = await response.json();
-                alert(result.message);
+                logContainer.textContent += `\nServer response: ${result.message}`;
             } catch (error) {
-                alert(`Training failed: ${error.message}`);
-            } finally {
+                logContainer.textContent += `\n\nError starting training: ${error.message}`;
+                // Останавливаем опрос логов в случае ошибки старта
+                clearInterval(logInterval);
                 trainButton.disabled = false;
-                trainButton.textContent = '🚀 Train Model';
-                // Обновляем статистику и логи после завершения
-                showStats();
-                showRedisInfo();
-                refreshLogs();
+                trainButton.textContent = '🚀 Start New Training';
             }
+            // Теперь мы не отключаем кнопку и не показываем alert.
+            // Пользователь сам видит по логам, когда процесс завершится.
+            // Можно добавить более умную логику, которая будет парсить логи 
+            // и автоматически определять завершение.
         }
 
         async function refreshLogs() {
             const logContainer = document.getElementById('log-container');
             try {
                 const response = await fetch('/get-logs');
-                const logs = await response.text();
-                logContainer.textContent = logs || 'No logs yet. Training may be in progress.';
-                logContainer.scrollTop = logContainer.scrollHeight;
+                if (response.ok) {
+                    const logs = await response.text();
+                    if (logs.trim() !== logContainer.textContent.trim()) {
+                        logContainer.textContent = logs;
+                        logContainer.scrollTop = logContainer.scrollHeight;
+                    }
+                }
             } catch (error) {
                 console.error("Failed to fetch logs:", error);
-                logContainer.textContent = "Error loading logs.";
-            }
-        }
-
-        function switchView(viewName) {
-            const logWrapper = document.getElementById('log-container-wrapper');
-            const postsContainer = document.getElementById('posts-container');
-            const paginationControls = document.getElementById('pagination-controls');
-
-            if (viewName === 'training') {
-                postsContainer.style.display = 'none';
-                paginationControls.style.display = 'none';
-                logWrapper.style.display = 'block';
-            } else {
-                postsContainer.style.display = 'block';
-                paginationControls.style.display = 'flex';
-                logWrapper.style.display = 'none';
             }
         }
         
-        // Автоматически загружаем посты при загрузке страницы
         document.addEventListener('DOMContentLoaded', () => {
-            switchView('moderation'); // Устанавливаем вид по умолчанию
+            switchView('moderation');
             loadAndClassifyPosts(currentPage);
             showRedisInfo();
-            // Set default values for manual check
             document.getElementById('manual-title').value = "How to earn $1000 in a week!";
             document.getElementById('manual-description').value = "Click this link now for a limited time offer. You won't regret it. Best crypto strategy.";
             document.getElementById('manual-tags').value = "money, crypto, investment, quick";
