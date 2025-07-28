@@ -46,17 +46,12 @@ git clone https://github.com/premananda108/redis8-spam-guard.git
 cd redis8-spam-guard
 ```
 
-2. **Запустите с Docker Compose (рекомендуется)**
-```bash
-docker-compose up -d
-```
-
-3. **Или установите локально**
+2. **Установите**
 ```bash
 # Создайте виртуальное окружение
 python -m venv venv
 # source venv/bin/activate  # Linux/Mac
-venc\Scripts\activate  # Windows
+venv\Scripts\activate  # Windows
 
 # Установите зависимости
 pip install -r requirements.txt
