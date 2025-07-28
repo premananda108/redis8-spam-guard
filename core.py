@@ -48,6 +48,7 @@ class SimilarPostInfo(BaseModel):
     title: str
     url: str
     score: float
+    label: str  # Added label
 
 class ClassificationResult(BaseModel):
     """Result of a post classification."""
@@ -129,7 +130,7 @@ class RedisVectorClassifier:
             return ""
         
         text = re.sub(r'<[^>]+>', '', text)
-        text = re.sub(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', '', text)
+        text = re.sub(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', '', text)
         text = re.sub(r'\s+', ' ', text)
         text = text.lower().strip()
         
@@ -297,10 +298,12 @@ class RediSearchClassifier:
                 if similar_posts:
                     labels = []
                     for post_data in similar_posts:
+                        label = await self.redis_classifier.redis_client.hget(f"post:{post_data['post_id']}", "label")
+                        if label:
+                            labels.append(label)
+                        # Add the label to the post_data dictionary before creating the Pydantic model
+                        post_data['label'] = label or 'unknown'
                         similar_posts_info.append(SimilarPostInfo(**post_data))
-                        label_bytes = await self.redis_classifier.redis_client.hget(f"post:{post_data['post_id']}", "label")
-                        if label_bytes:
-                            labels.append(label_bytes)
                     
                     if labels:
                         label_counts = Counter(labels)

@@ -193,7 +193,11 @@
                     <div class="reasoning">
                         <strong>🔗 Similar to posts:</strong>
                         <ul>
-                            ${classification.similar_posts.map(p => p.url ? `<li><a href="${p.url}" target="_blank">${p.title}</a> (Score: ${p.score.toFixed(2)})</li>` : `<li>${p.title} (Score: ${p.score.toFixed(2)})</li>`).join('')}
+                            ${classification.similar_posts.map(p => {
+                                const spamLabel = p.label === 'spam' ? ' <strong style="color: red;">(Spam)</strong>' : '';
+                                const link = p.url ? `<a href="${p.url}" target="_blank">${p.title}</a>` : p.title;
+                                return `<li>${link}${spamLabel} (Score: ${p.score.toFixed(2)})</li>`;
+                            }).join('')}
                         </ul>
                     </div>
                     `
@@ -281,7 +285,11 @@
                             <div class="reasoning">
                                 <strong>🔗 Similar to posts:</strong>
                                 <ul>
-                                    ${classification.similar_posts.map(p => p.url ? `<li><a href="${p.url}" target="_blank">${p.title}</a> (Score: ${p.score.toFixed(2)})</li>` : `<li>${p.title} (Score: ${p.score.toFixed(2)})</li>`).join('')}
+                                    ${classification.similar_posts.map(p => {
+                                const spamLabel = p.label === 'spam' ? ' <strong style="color: red;">(Spam)</strong>' : '';
+                                const link = p.url ? `<a href="${p.url}" target="_blank">${p.title}</a>` : p.title;
+                                return `<li>${link}${spamLabel} (Score: ${p.score.toFixed(2)})</li>`;
+                            }).join('')}
                                 </ul>
                             </div>
                             `
