@@ -1,100 +1,100 @@
-# Эволюция логики: Как мы улучшили векторную модель для борьбы со спамом
+# The Evolution of Logic: How We Improved the Vector Model to Combat Spam
 
-В первой версии нашей системы `Redis8 Spam Guard` мы использовали гибридный подход к векторизации постов. Вектор, представляющий каждый пост, состоял из двух частей:
+In the first version of our `Redis8 Spam Guard` system, we used a hybrid approach to post vectorization. The vector representing each post consisted of two parts:
 
-1.  **Текстовый эмбеддинг (384 измерения):** Смысловое представление заголовка и описания.
-2.  **Числовые признаки (5 измерений):** Метаданные поста, включая `reading_time`, `reactions_count`, `comments_count`, `user_followers` и `tags_count`.
+1.  **Text Embedding (384 dimensions):** A semantic representation of the title and description.
+2.  **Numerical Features (5 dimensions):** Post metadata, including `reading_time`, `reactions_count`, `comments_count`, `user_followers`, and `tags_count`.
 
-Итоговый вектор имел размерность 389. На этапе обучения эта модель показывала себя хорошо, так как она училась на исторических данных, где у постов уже была накопленная статистика вовлеченности.
+The resulting vector had a dimensionality of 389. During the training phase, this model performed well because it was learning from historical data where posts had already accumulated engagement statistics.
 
-## Проблема: Логический парадокс при работе в реальном времени
+## The Problem: A Logical Paradox in Real-Time Operation
 
-В ходе анализа мы обнаружили фундаментальную проблему в этом подходе, которая проявлялась при классификации **новых** постов.
+During our analysis, we discovered a fundamental problem with this approach that became apparent when classifying **new** posts.
 
-**Суть проблемы:** Наша система создана, чтобы реагировать на спам **мгновенно**, в момент его появления. У нового поста по определению еще нет ни реакций, ни комментариев. Его `reactions_count` и `comments_count` всегда равны нулю.
+**The Core Issue:** Our system is designed to react to spam **instantly**, at the moment it appears. A new post, by definition, has no reactions or comments yet. Its `reactions_count` and `comments_count` are always zero.
 
-Когда мы создавали вектор для такого поста, нулевые значения в компонентах вовлеченности делали его математически "ближе" к тем векторам из обучающей выборки, у которых тоже была низкая вовлеченность. А это, как правило, и были спам-посты.
+When we created a vector for such a post, the zero values in the engagement components made it mathematically "closer" to the vectors from the training set that also had low engagement. And those, as a rule, were the spam posts.
 
-Получался парадокс: система была излишне подозрительной к **любому** новому посту, потому что его "профиль вовлеченности" был похож на спам. Мы сравнивали "яблоки" (новые посты без истории) с "апельсинами" (старыми постами с историей).
+This created a paradox: the system was overly suspicious of **any** new post because its "engagement profile" looked like spam. We were comparing "apples" (new posts without history) to "oranges" (old posts with history).
 
-## Решение: Разделение логики маркировки и векторизации
+## The Solution: Separating Labeling and Vectorization Logic
 
-Ключевая идея по улучшению системы заключается в том, чтобы разделить процесс принятия решения о метке "спам/не спам" и процесс создания векторного представления поста.
+The key idea for improving the system is to separate the process of deciding on a "spam/not spam" label from the process of creating the post's vector representation.
 
-### 1. Этап обучения: Интеллектуальная маркировка
+### 1. Training Phase: Intelligent Labeling
 
-Мы по-прежнему используем эвристики, которые анализируют **все** доступные данные о посте, включая вовлеченность. Это позволяет нам с высокой точностью присвоить историческим данным метку `is_spam = True` или `is_spam = False`. Этот этап — "работа учителя", который использует всю полноту информации для создания качественного обучающего датасета.
+We still use heuristics that analyze **all** available data about a post, including engagement. This allows us to assign the `is_spam = True` or `is_spam = False` label to historical data with high accuracy. This phase is the "teacher's work," using the full scope of information to create a high-quality training dataset.
 
-### 2. Этап векторизации: "Чистый" вектор
+### 2. Vectorization Phase: A "Clean" Vector
 
-А вот в сам вектор, который мы сохраняем в Redis, мы теперь включаем **только те признаки, которые известны в момент создания поста**. Мы **исключили** из него `reactions_count` и `comments_count`.
+However, in the vector that we now save to Redis, we include **only those features that are known at the moment the post is created**. We have **excluded** `reactions_count` and `comments_count` from it.
 
-**Старый вектор (389 измерений):**
-`[Текст (384), Время чтения, **Реакции**, **Комментарии**, Подписчики, Кол-во тегов]`
+**Old Vector (389 dimensions):**
+`[Text (384), Reading Time, **Reactions**, **Comments**, Followers, Tag Count]`
 
-**Новый, улучшенный вектор (387 измерений):**
-`[Текст (384), Время чтения, Подписчики, Кол-во тегов]`
+**New, Improved Vector (387 dimensions):**
+`[Text (384), Reading Time, Followers, Tag Count]`
 
-## Преимущества нового подхода
+## Advantages of the New Approach
 
-1.  **Корректное сравнение:** Теперь вектор нового поста сравнивается с векторами из обучающей выборки по одинаковым, "честным" параметрам. Модель фокусируется на **содержании** поста и **репутации автора**, а не на вовлеченности, которой еще не может быть.
-2.  **Устранение предвзятости:** Мы убрали предвзятость системы по отношению к новым постам. Теперь хороший пост от нового автора не будет ошибочно классифицирован как спам только потому, что у него 0 лайков.
-3.  **Более робастная модель:** Система вынуждена учиться находить спам по его сути (ключевые слова, структура текста, подозрительные теги), а не по косвенным признакам. Это делает модель более устойчивой и точной.
+1.  **Correct Comparison:** Now, the vector of a new post is compared with vectors from the training set using the same, "fair" parameters. The model focuses on the **content** of the post and the **author's reputation**, not on engagement that cannot yet exist.
+2.  **Elimination of Bias:** We have removed the system's bias against new posts. Now, a good post from a new author will not be mistakenly classified as spam just because it has 0 likes.
+3.  **More Robust Model:** The system is forced to learn to identify spam by its essence (keywords, text structure, suspicious tags), rather than by indirect signs. This makes the model more stable and accurate.
 
-Этот рефакторинг логики — отличный пример того, как критический анализ работы системы может привести к значительному улучшению ее архитектуры и надежности, не требуя при этом сложных изменений в коде.
+This refactoring of logic is an excellent example of how a critical analysis of a system's operation can lead to a significant improvement in its architecture and reliability without requiring complex code changes.
 
-## Финальный рывок: Создание синтетического датасета
+## The Final Push: Creating a Synthetic Dataset
 
-После внедрения улучшенной логики мы столкнулись с новой проблемой: несбалансированность данных. Данные с dev.to содержали очень мало реального спама. В результате модель, даже будучи архитектурно правильной, не могла эффективно обучаться — ей просто не хватало примеров "плохого" поведения. Метрики `precision` и `recall` оставались на нуле.
+After implementing the improved logic, we faced a new problem: data imbalance. The data from dev.to contained very little real spam. As a result, the model, even with a correct architecture, could not train effectively—it simply lacked examples of "bad" behavior. The `precision` and `recall` metrics remained at zero.
 
-Решение было очевидным: если в реальных данных нет спама, мы должны создать его сами.
+The solution was obvious: if there is no spam in the real data, we must create it ourselves.
 
-Мы сгенерировали файл `spam_dataset.json`, содержащий 50 разнообразных примеров явного спама:
+We generated a `spam_dataset.json` file containing 50 diverse examples of blatant spam:
 
--   Предложения быстрого заработка и крипто-схемы.
--   Фишинговые ссылки и поддельные уведомления безопасности.
--   Продажа SEO-услуг, накрутка подписчиков.
--   Сомнительные курсы, чудо-товары и многое другое.
+-   Offers of quick earnings and crypto schemes.
+-   Phishing links and fake security notifications.
+-   Sales of SEO services, follower boosting.
+-   Dubious courses, miracle products, and much more.
 
-Затем мы доработали скрипт обучения, чтобы он объединял "чистые" данные с dev.to с нашим "грязным" спам-датасетом. Это позволило создать сбалансированную выборку, на которой модель смогла наконец-то раскрыть свой потенциал.
+We then enhanced the training script to combine the "clean" data from dev.to with our "dirty" spam dataset. This allowed us to create a balanced sample on which the model could finally unleash its potential.
 
-## Результат: Работающая и надежная модель
+## The Result: A Working and Reliable Model
 
-После обучения на новом, сбалансированном датасете мы получили следующие метрики:
+After training on the new, balanced dataset, we obtained the following metrics:
 
--   **Accuracy (Точность):** ~94%
--   **Precision (Прецизионность):** **1.0** — идеальный результат! Это означает, что модель не совершила **ни одного ложного срабатывания**, назвав хороший пост спамом.
--   **Recall (Полнота):** **~30%** — модель успешно обнаружила и классифицировала треть всего спама в тестовой выборке. Это огромный скачок с нуля и отличная отправная точка для дальнейших улучшений.
+-   **Accuracy:** ~94%
+-   **Precision:** **1.0** — a perfect result! This means the model made **zero false positives**, labeling a good post as spam.
+-   **Recall:** **~30%** — the model successfully detected and classified one-third of all spam in the test set. This is a huge leap from zero and an excellent starting point for further improvements.
 
-Полученная модель является "осторожной": она предпочитает пропустить спам, чем заблокировать легитимный контент. Это критически важное свойство для любой системы модерации.
+The resulting model is "cautious": it prefers to miss spam rather than block legitimate content. This is a critically important property for any moderation system.
 
-В итоге, пройдя путь от анализа и исправления архитектурных недостатков до обогащения данных, мы создали по-настоящему работающую и надежную систему для борьбы со спамом.
+In the end, by going from analyzing and fixing architectural flaws to enriching the data, we have created a truly working and reliable system for combating spam.
 
-## Финальные штрихи: Улучшение интерфейса и пользовательского опыта
+## Final Touches: Improving the Interface and User Experience
 
-На последнем этапе мы сосредоточились на доработке веб-интерфейса, чтобы сделать его максимально удобным и информативным для конечного пользователя (модератора).
+In the final stage, we focused on refining the web interface to make it as convenient and informative as possible for the end-user (the moderator).
 
-### 1. Визуализация процесса обучения
+### 1. Visualizing the Training Process
 
-Изначально процесс обучения запускался в "слепом" фоновом режиме. Чтобы сделать его прозрачным, мы реализовали простую, но эффективную систему логирования:
+Initially, the training process was launched in a "blind" background mode. To make it transparent, we implemented a simple but effective logging system:
 
--   Скрипт обучения (`train_model.py`) теперь записывает весь свой прогресс в текстовый файл `training.log`.
--   В веб-интерфейс был добавлен специальный эндпоинт (`/get-logs`) и кнопка "Refresh Logs".
--   При запуске обучения интерфейс теперь автоматически переключается в "режим обучения", скрывая ленту постов и показывая специальное окно, в котором можно отслеживать прогресс, обновляя логи по кнопке.
+-   The training script (`train_model.py`) now writes all its progress to a text file, `training.log`.
+-   A special endpoint (`/get-logs`) and a "Refresh Logs" button were added to the web interface.
+-   When training is started, the interface now automatically switches to "training mode," hiding the post feed and showing a special window where progress can be tracked by refreshing the logs with a button.
 
-### 2. Приоритет новым постам
+### 2. Prioritizing New Posts
 
-Мы осознали, что для модерации важны не "популярные", а "свежие" посты. Мы изменили запрос к API dev.to, добавив параметр `state=fresh`. Теперь панель модератора по умолчанию показывает самые новые из опубликованных постов, что позволяет реагировать на потенциальный спам максимально оперативно.
+We realized that for moderation, "fresh" posts are more important than "popular" ones. We changed the request to the dev.to API by adding the `state=fresh` parameter. Now, the moderator panel defaults to showing the most recently published posts, allowing for the most rapid response to potential spam.
 
-### 3. Разделение режимов интерфейса
+### 3. Separating Interface Modes
 
-Чтобы избежать путаницы и сделать интерфейс более сфокусированным, мы ввели два режима работы:
+To avoid confusion and make the interface more focused, we introduced two operating modes:
 
--   **Режим модерации:** Показывает ленту постов и пагинацию. Активируется по умолчанию и при нажатии на "Load Latest Posts".
--   **Режим обучения:** Показывает окно с логами. Активируется при нажатии на "Train Model".
+-   **Moderation Mode:** Shows the post feed and pagination. Activated by default and when clicking "Load Latest Posts".
+-   **Training Mode:** Shows the log window. Activated when clicking "Train Model".
 
-При переключении между режимами второстепенные блоки (например, блок со статистикой) автоматически скрываются, чтобы не загромождать интерфейс.
+When switching between modes, secondary blocks (like the statistics block) are automatically hidden to avoid cluttering the interface.
 
-### Важное замечание о данных
+### Important Note on Data
 
-Стоит отметить, что наше приложение использует **публичный API** dev.to. Оно анализирует посты, которые уже прошли первичную модерацию и были опубликованы. Поэтому список постов в нашем инструменте **не будет совпадать** со списком в официальной, внутренней панели модерации dev.to, которая работает с постами еще до их публикации. Наш инструмент следует рассматривать как вторую линию защиты и мощное средство для анализа спам-тенденций среди уже опубликованного контента.
+It is worth noting that our application uses the **public API** of dev.to. It analyzes posts that have already passed initial moderation and have been published. Therefore, the list of posts in our tool **will not match** the list in the official, internal dev.to moderation panel, which works with posts before they are published. Our tool should be considered a second line of defense and a powerful means for analyzing spam trends among already published content.

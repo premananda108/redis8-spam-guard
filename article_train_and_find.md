@@ -1,62 +1,62 @@
-# Принцип работы системы классификации спама
+# How the Spam Classification System Works
 
-Этот документ описывает архитектуру и логику работы системы обнаружения спама, построенной с использованием модели `all-MiniLM-L6-v2` и Redis.
+This document describes the architecture and logic of the spam detection system, built using the `all-MiniLM-L6-v2` model and Redis.
 
-## Ключевые компоненты
+## Key Components
 
-1.  **Модель векторизации:** `all-MiniLM-L6-v2`
-2.  **База данных векторов:** Redis (с модулем RediSearch)
-3.  **Источник данных для обучения:** API сайта `dev.to`
-4.  **Механизм разметки:** Автоматический, на основе эвристик.
-
----
-
-## Роль модели `all-MiniLM-L6-v2`
-
-Ключевой момент: **мы не обучаем эту модель**. Мы используем её как готовый, предварительно обученный инструмент.
-
-`all-MiniLM-L6-v2` — это компактная и быстрая модель-трансформер, которая решает одну задачу: преобразование текста (например, заголовка и описания поста) в числовой вектор (в нашем случае, массив из 384 чисел). Этот процесс называется **векторизацией** или **созданием эмбеддингов**.
-
-Этот вектор представляет собой математическое "воплощение" смысла текста. Тексты с похожим смыслом будут иметь близкие друг к другу векторы.
-
-Модель была выбрана за её идеальный баланс между:
-*   **Качеством:** Она хорошо понимает контекст и нюансы языка.
-*   **Скоростью и размером:** Она достаточно легкая для работы в реальном времени без специализированного оборудования (GPU).
+1.  **Vectorization Model:** `all-MiniLM-L6-v2`
+2.  **Vector Database:** Redis (with the RediSearch module)
+3.  **Training Data Source:** The `dev.to` API
+4.  **Labeling Mechanism:** Automatic, based on heuristics.
 
 ---
 
-## Процесс "Обучения" (Создание базы знаний)
+## The Role of the `all-MiniLM-L6-v2` Model
 
-Наш процесс, который мы называем "обучением", на самом деле является **созданием и наполнением базы знаний** в Redis. Вот как он устроен:
+The key point is: **we do not train this model**. We use it as a ready-made, pre-trained tool.
 
-1.  **Сбор данных:** Скрипт `train_model.py` обращается к публичному API `dev.to` и скачивает сотни реальных постов.
+`all-MiniLM-L6-v2` is a compact and fast transformer model that solves one task: converting text (e.g., a post's title and description) into a numerical vector (in our case, an array of 384 numbers). This process is called **vectorization** or **creating embeddings**.
 
-2.  **Автоматическая разметка:** Для каждого скачанного поста запускается `SpamLabelGenerator`. Этот класс, основываясь на наборе **эвристик (правил)**, присваивает посту метку: `spam` или `not_spam`.
-    *   **Примеры эвристик:** наличие спам-ключевых слов ("earn money", "buy now"), малое количество реакций, подозрительные теги, низкое число подписчиков у автора и т.д.
+This vector is a mathematical "embodiment" of the text's meaning. Texts with similar meanings will have vectors that are close to each other.
 
-3.  **Векторизация:** Для каждого поста создается комбинированный вектор, который состоит из двух частей:
-    *   **Текстовый вектор:** Заголовок и описание поста передаются модели `all-MiniLM-L6-v2`, которая преобразует их в числовой вектор (эмбеддинг из 384 чисел), отражающий смысл текста.
-    *   **Числовые признаки:** К текстовому вектору добавляются нормализованные числовые значения: время чтения, количество подписчиков у автора и количество тегов. Это позволяет находить посты, похожие не только по смыслу, но и по структуре.
-
-4.  **Сохранение в Redis:** В Redis для каждого поста сохраняется набор данных, включающий:
-    *   Сгенерированный **вектор**.
-    *   Присвоенную **метку** (`spam`/`not_spam`).
-    *   **Заголовок** и **URL** поста для быстрого отображения в интерфейсе.
-
-**Итог:** Мы не загружаем в Redis саму модель. Мы загружаем в него **результаты её работы** — векторы, которым мы сами присвоили метки.
+The model was chosen for its ideal balance between:
+*   **Quality:** It understands context and language nuances well.
+*   **Speed and Size:** It is lightweight enough to work in real-time without specialized hardware (GPU).
 
 ---
 
-## Роль Redis в классификации
+## The "Training" Process (Creating a Knowledge Base)
 
-Когда на проверку поступает новый, неизвестный пост, система выполняет следующие шаги:
+Our process, which we call "training," is actually the **creation and population of a knowledge base** in Redis. Here's how it's structured:
 
-1.  **Векторизация:** Текст нового поста так же пропускается через модель `all-MiniLM-L6-v2` для получения его вектора.
+1.  **Data Collection:** The `train_model.py` script accesses the public `dev.to` API and downloads hundreds of real posts.
 
-2.  **Поиск ближайших соседей (k-NN Search):** Система обращается к Redis с запросом: "Найди в базе `k` векторов, наиболее близких к вектору нового поста". (В нашей конфигурации `k=9`).
+2.  **Automatic Labeling:** For each downloaded post, the `SpamLabelGenerator` is run. This class, based on a set of **heuristics (rules)**, assigns a label to the post: `spam` or `not_spam`.
+    *   **Examples of heuristics:** presence of spam keywords ("earn money," "buy now"), low number of reactions, suspicious tags, low follower count for the author, etc.
 
-3.  **Голосование:** Система смотрит на метки (`spam`/`not_spam`), которые хранятся у найденных соседей.
-    *   Если большинство соседей имеют метку `spam`, новый пост классифицируется как спам.
-    *   В противном случае он считается легитимным.
+3.  **Vectorization:** A combined vector is created for each post, consisting of two parts:
+    *   **Text Vector:** The post's title and description are passed to the `all-MiniLM-L6-v2` model, which converts them into a numerical vector (an embedding of 384 numbers) that reflects the meaning of the text.
+    *   **Numerical Features:** Normalized numerical values are added to the text vector: reading time, author's follower count, and the number of tags. This allows finding posts that are similar not only in meaning but also in structure.
 
-Таким образом, Redis выполняет роль быстрой "картотеки", которая позволяет по "смысловому отпечатку" (вектору) нового поста мгновенно находить похожие на него посты из прошлого и делать вывод на основе их меток.
+4.  **Saving to Redis:** A set of data is saved in Redis for each post, including:
+    *   The generated **vector**.
+    *   The assigned **label** (`spam`/`not_spam`).
+    *   The **title** and **URL** of the post for quick display in the interface.
+
+**The bottom line:** We do not load the model itself into Redis. We load **the results of its work** into it—vectors to which we have assigned labels ourselves.
+
+---
+
+## The Role of Redis in Classification
+
+When a new, unknown post is submitted for review, the system performs the following steps:
+
+1.  **Vectorization:** The text of the new post is also passed through the `all-MiniLM-L6-v2` model to obtain its vector.
+
+2.  **k-Nearest Neighbors Search (k-NN Search):** The system queries Redis with a request: "Find the `k` vectors in the database that are closest to the vector of the new post." (In our configuration, `k=9`).
+
+3.  **Voting:** The system looks at the labels (`spam`/`not_spam`) stored with the found neighbors.
+    *   If the majority of the neighbors have the `spam` label, the new post is classified as spam.
+    *   Otherwise, it is considered legitimate.
+
+Thus, Redis acts as a fast "card catalog" that allows, based on the "semantic fingerprint" (vector) of a new post, to instantly find similar posts from the past and draw a conclusion based on their labels.

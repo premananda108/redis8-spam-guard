@@ -433,7 +433,7 @@
                     <p><strong>Current Model Accuracy (from last training):</strong> ${accuracy_text}</p>
                     <p><strong>Trained Examples (Vectors in DB):</strong> ${vector_count}</p>
                     <hr>
-                    <p>Clicking 'Start New Training' will delete all existing trained data and rebuild the model using the <code>spam_dataset.json</code> file.</p>
+                    <p>Clicking 'Start New Training' will delete all existing trained data and rebuild the model using the <code>spam_dataset.json</code> file and fresh data from the Dev.to API.</p>
                 `;
             } catch (error) {
                 statsContainer.innerHTML = `<p style="color: red;">Could not load model info: ${error.message}</p>`;
@@ -457,15 +457,14 @@
                 logContainer.textContent += `\nServer response: ${result.message}`;
             } catch (error) {
                 logContainer.textContent += `\n\nError starting training: ${error.message}`;
-                // Останавливаем опрос логов в случае ошибки старта
+                // Stop polling for logs if starting fails
                 clearInterval(logInterval);
                 trainButton.disabled = false;
                 trainButton.textContent = '🚀 Start New Training';
             }
-            // Теперь мы не отключаем кнопку и не показываем alert.
-            // Пользователь сам видит по логам, когда процесс завершится.
-            // Можно добавить более умную логику, которая будет парсить логи 
-            // и автоматически определять завершение.
+            // We no longer disable the button or show an alert.
+            // The user can see from the logs when the process is complete.
+            // A more advanced implementation could parse the logs to automatically detect completion.
         }
 
         async function refreshLogs() {

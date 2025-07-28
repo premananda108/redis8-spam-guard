@@ -26,11 +26,11 @@ class ModelSingleton:
             cls._instance = SentenceTransformer('all-MiniLM-L6-v2')
         return cls._instance
 
-# Настройка логирования
+# Logging setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Pydantic модели
+# Pydantic models
 class DevToPost(BaseModel):
     id: int
     title: str
@@ -50,7 +50,7 @@ class SimilarPostInfo(BaseModel):
     score: float
 
 class ClassificationResult(BaseModel):
-    """Результат классификации поста."""
+    """Result of a post classification."""
     post_id: int
     is_spam: bool
     confidence: float
@@ -86,7 +86,7 @@ class RedisVectorClassifier:
         self.index_name = "post_vectors"
 
     async def init_redis(self):
-        """Инициализация асинхронного клиента Redis и проверка индекса."""
+        """Initializes the async Redis client and checks the index."""
         if self.redis_client:
             return
         try:
@@ -99,7 +99,7 @@ class RedisVectorClassifier:
             self.redis_client = None
 
     async def create_index(self):
-        """Создание индекса RediSearch, если он не существует."""
+        """Creates the RediSearch index if it doesn't exist."""
         if not self.redis_client:
             logger.error("Cannot create index, Redis client is not initialized.")
             return
@@ -124,19 +124,19 @@ class RedisVectorClassifier:
                 raise
 
     def preprocess_text(self, text: Optional[str]) -> str:
-        """Очистка текста"""
+        """Cleans up text."""
         if not text:
             return ""
         
         text = re.sub(r'<[^>]+>', '', text)
-        text = re.sub(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', '', text)
+        text = re.sub(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', '', text)
         text = re.sub(r'\s+', ' ', text)
         text = text.lower().strip()
         
         return text
 
     def create_features(self, post: DevToPost) -> Dict[str, Any]:
-        """Создание признаков для классификации"""
+        """Creates features for classification."""
         return {
             'title': self.preprocess_text(post.title),
             'description': self.preprocess_text(post.description),
@@ -149,7 +149,7 @@ class RedisVectorClassifier:
         }
 
     def get_spam_indicators(self, features: Dict[str, Any]) -> List[str]:
-        """Определение индикаторов спама"""
+        """Determines spam indicators."""
         indicators = []
         
         if features['reading_time'] < 2 and features['reactions_count'] < 5:
@@ -172,7 +172,7 @@ class RedisVectorClassifier:
         return indicators
 
     async def vectorize_post(self, post: DevToPost) -> tuple[np.ndarray, Dict[str, Any]]:
-        """Создание вектора из поста и возврат обновленных признаков"""
+        """Creates a vector from a post and returns updated features."""
         features = self.create_features(post)
         
         user_followers = features.get('user_followers', -1)
@@ -214,7 +214,7 @@ class RedisVectorClassifier:
         return final_vector.astype(np.float32), features
 
     async def store_training_vector(self, post_id: int, vector: np.ndarray, label: int, title: str, url: str):
-        """Сохранение вектора в Redis для обучения"""
+        """Saves a vector to Redis for training."""
         if not self.redis_client:
             logger.warning("Redis is not available. Skipping vector storage.")
             return
@@ -232,7 +232,7 @@ class RedisVectorClassifier:
             raise
 
     async def find_similar_posts(self, query_vector: np.ndarray, k: int = 5) -> List[Dict[str, Any]]:
-        """Поиск похожих постов"""
+        """Finds similar posts."""
         if not self.redis_client:
             return []
         try:
@@ -281,7 +281,7 @@ class RediSearchClassifier:
         self.k = k
     
     async def predict(self, post: DevToPost) -> tuple[int, float, List[str], List[SimilarPostInfo]]:
-        """Предсказание класса поста"""
+        """Predicts the class of a post."""
         import time
         start_time = time.time()
         

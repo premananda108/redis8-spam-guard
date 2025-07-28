@@ -1,18 +1,18 @@
 # 🛡️ Redis8 Spam Guard
 
-Интеллектуальная система классификации спама для постов dev.to с использованием Redis 8 Vector Sets и FastAPI.
+An intelligent spam classification system for dev.to posts using Redis 8 Vector Sets and FastAPI.
 
-## 🎯 Особенности
+## 🎯 Features
 
-- **Real-time классификация** - мгновенный анализ постов.
-- **Redis 8 Vector Sets** - использование новейшей технологии векторного поиска.
-- **FastAPI** - современный асинхронный API.
-- **Машинное обучение** - классификация на основе k-NN с векторными эмбеддингами.
-- **Интерактивный Web UI** - панель для модераторов с классификацией постов в реальном времени, ручной проверкой, статистикой и логами обучения.
-- **Динамическое обогащение данных** - автоматическая загрузка дополнительных данных, таких как количество подписчиков автора, для более точной классификации.
-- **Обратная связь** - система улучшения модели на основе отзывов модераторов.
+- **Real-time classification** - instant analysis of posts.
+- **Redis 8 Vector Sets** - leveraging the latest vector search technology.
+- **FastAPI** - a modern asynchronous API.
+- **Machine Learning** - classification based on k-NN with vector embeddings.
+- **Interactive Web UI** - a dashboard for moderators with real-time post classification, manual checking, statistics, and training logs.
+- **Dynamic Data Enrichment** - automatic loading of additional data, such as the author's follower count, for more accurate classification.
+- **Feedback Loop** - a system for improving the model based on moderator feedback.
 
-## 🏗️ Архитектура
+## 🏗️ Architecture
 
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
@@ -21,75 +21,75 @@
 └─────────────────┘    └──────────────────┘    └─────────────────┘
 ```
 
-### Компоненты:
+### Components:
 
-1. **Data Collector** - сбор постов и данных о пользователях с dev.to API.
-2. **Text Preprocessor** - очистка и подготовка текста.
-3. **Vector Embedder** - преобразование текста и числовых признаков в векторы с помощью Sentence Transformers.
-4. **Redis Vector Store** - хранение и поиск векторов в Redis 8.
-5. **k-NN Classifier** - классификация на основе ближайших соседей.
-6. **FastAPI Server** - REST API для классификации и предоставления Web UI.
-7. **Web Interface** - интерактивная панель управления для модераторов.
+1. **Data Collector** - collects posts and user data from the dev.to API.
+2. **Text Preprocessor** - cleans and prepares text.
+3. **Vector Embedder** - converts text and numerical features into vectors using Sentence Transformers.
+4. **Redis Vector Store** - stores and searches for vectors in Redis 8.
+5. **k-NN Classifier** - classifies based on the nearest neighbors.
+6. **FastAPI Server** - provides a REST API for classification and serves the Web UI.
+7. **Web Interface** - an interactive control panel for moderators.
 
-## 🚀 Быстрый старт
+## 🚀 Quick Start
 
-### Предварительные требования
+### Prerequisites
 
 - Python 3.11+
-- Docker и Docker Compose
+- Docker and Docker Compose
 
-### Установка
+### Installation
 
-1. **Клонируйте репозиторий**
+1. **Clone the repository**
 ```bash
 git clone https://github.com/premananda108/redis8-spam-guard.git
 cd redis8-spam-guard
 ```
 
-2. **Установите**
+2. **Set up**
 ```bash
-# Создайте виртуальное окружение
+# Create a virtual environment
 python -m venv venv
 # source venv/bin/activate  # Linux/Mac
-venv\Scripts\activate  # Windows
+vvenv\Scripts\activate  # Windows
 
-# Установите зависимости
+# Install dependencies
 pip install -r requirements.txt
 
-# Запустите Redis 8 в Docker
+# Run Redis 8 in Docker
 docker run -d --name redis8-spam-guard -p 6379:6379 redis:8.0.3-bookworm
 
-# Запустите приложение
+# Run the application
 uvicorn main:app --reload
 ```
 
-### Первоначальное обучение модели
+### Initial Model Training
 
-Обучение можно запустить прямо из веб-интерфейса (кнопка "Train Model") или командой в терминале:
+Training can be started directly from the web interface (the "Train Model" button) or with a command in the terminal:
 ```bash
-# Соберите данные и обучите модель
+# Collect data and train the model
 python train_model.py
 ```
 
-## 📖 Использование
+## 📖 Usage
 
-### Web интерфейс
+### Web Interface
 
-Откройте **http://localhost:8000** в браузере для доступа к "Moderator Assistant".
+Open **http://localhost:8000** in your browser to access the "Moderator Assistant".
 
-Возможности интерфейса:
-- **Лента постов**: Загружает последние посты с dev.to и немедленно их классифицирует.
-- **Ручная проверка**: Форма для проверки любого поста по его параметрам (заголовок, описание, теги и т.д.).
-- **Статистика**: Отображает статистику работы классификатора и информацию о подключении к Redis.
-- **Обучение модели**: Позволяет запустить процесс обучения и отслеживать его прогресс через логи в реальном времени.
+Interface features:
+- **Post Feed**: Loads the latest posts from dev.to and classifies them immediately.
+- **Manual Check**: A form to check any post based on its parameters (title, description, tags, etc.).
+- **Statistics**: Displays classifier performance statistics and Redis connection information.
+- **Model Training**: Allows you to start the training process and monitor its progress through real-time logs.
 
 ### REST API
 
-#### Классификация
-- `POST /classify`: Классификация одного поста.
-- `POST /classify-batch`: Пакетная классификация нескольких постов.
+#### Classification
+- `POST /classify`: Classify a single post.
+- `POST /classify-batch`: Batch classification of multiple posts.
 
-**Пример запроса:**
+**Example request:**
 ```bash
 curl -X POST "http://localhost:8000/classify" \
   -H "Content-Type: application/json" \
@@ -105,7 +105,7 @@ curl -X POST "http://localhost:8000/classify" \
   }'
 ```
 
-**Пример ответа:**
+**Example response:**
 ```json
 {
   "post_id": 123,
@@ -117,81 +117,81 @@ curl -X POST "http://localhost:8000/classify" \
 }
 ```
 
-#### Обратная связь
-- `POST /feedback`: Отправка обратной связи от модератора для будущего дообучения модели.
+#### Feedback
+- `POST /feedback`: Send moderator feedback for future model retraining.
 
-#### Мониторинг и управление
-- `GET /`: Главная страница с веб-интерфейсом.
-- `GET /stats`: Получение статистики по классификациям.
-- `GET /health`: Проверка состояния сервиса и подключения к Redis.
-- `GET /redis-info`: Информация о версии Redis и количестве векторов в базе.
-- `POST /train`: Запуск процесса обучения модели в фоновом режиме.
-- `GET /get-logs`: Получение логов процесса обучения.
+#### Monitoring and Management
+- `GET /`: Main page with the web interface.
+- `GET /stats`: Get classification statistics.
+- `GET /health`: Check the service status and Redis connection.
+- `GET /redis-info`: Information about the Redis version and the number of vectors in the database.
+- `POST /train`: Start the model training process in the background.
+- `GET /get-logs`: Get the logs of the training process.
 
-## 🧠 Как работает классификация
+## 🧠 How Classification Works
 
-### 1. Извлечение и обогащение признаков
-Система извлекает основные признаки из поста и динамически обогащает их, запрашивая дополнительные данные (например, количество подписчиков автора) через API dev.to.
+### 1. Feature Extraction and Enrichment
+The system extracts basic features from the post and dynamically enriches them by requesting additional data (e.g., the author's follower count) via the dev.to API.
 
-### 2. Векторизация
-- **Текстовые признаки** (заголовок, описание) преобразуются в вектор с помощью `Sentence Transformers` (384 измерения).
-- **Числовые признаки** (время чтения, подписчики, теги) нормализуются и добавляются к вектору.
-- **Итоговый вектор**: ~387 измерений.
+### 2. Vectorization
+- **Text features** (title, description) are converted into a vector using `Sentence Transformers` (384 dimensions).
+- **Numerical features** (reading time, followers, tags) are normalized and added to the vector.
+- **Final vector**: ~387 dimensions.
 
-### 3. Поиск похожих постов (k-NN)
-- Используется `Redis Vector Search` для сверхбыстрого поиска `k` ближайших соседей (постов с похожими векторами) в базе данных обученных примеров.
+### 3. Similar Post Search (k-NN)
+- `Redis Vector Search` is used for ultra-fast search of `k` nearest neighbors (posts with similar vectors) in the database of trained examples.
 
-### 4. Классификация
-- **Основной метод**: Голосование большинства среди `k` найденных соседей. Если большинство - спам, пост классифицируется как спам.
-- **Резервный метод (эвристики)**: Если Redis недоступен или похожие посты не найдены, система использует набор правил (наличие спам-слов, низкая вовлеченность, подозрительные теги и т.д.) для вынесения вердикта.
-- Рассчитывается `confidence score` (уверенность в прогнозе).
+### 4. Classification
+- **Primary method**: Majority vote among the `k` found neighbors. If the majority are spam, the post is classified as spam.
+- **Fallback method (heuristics)**: If Redis is unavailable or no similar posts are found, the system uses a set of rules (presence of spam words, low engagement, suspicious tags, etc.) to make a verdict.
+- A `confidence score` is calculated.
 
-## 📊 Мониторинг и Статистика
+## 📊 Monitoring and Statistics
 
-Вместо внешних систем, таких как Prometheus/Grafana, в приложение встроены простые и эффективные инструменты мониторинга:
-- **Web-интерфейс**: Отображает ключевые метрики в реальном времени.
-- **`/stats` endpoint**: Возвращает JSON с общей статистикой (количество обработанных постов, найденного спама, точность последней обученной модели).
-- **`/health` endpoint**: Позволяет проверить работоспособность сервиса и статус подключения к Redis.
+Instead of external systems like Prometheus/Grafana, the application has simple and effective built-in monitoring tools:
+- **Web interface**: Displays key metrics in real-time.
+- **`/stats` endpoint**: Returns JSON with general statistics (number of processed posts, spam found, accuracy of the last trained model).
+- **`/health` endpoint**: Allows checking the service's health and the status of the Redis connection.
 
-## 🤝 Участие в разработке
+## 🤝 Contributing
 
-### Структура проекта
+### Project Structure
 ```
 redis8-spam-guard/
-├── main.py                 # FastAPI приложение и Web UI
-├── core.py                 # Основная логика классификации
-├── train_model.py          # Скрипт для сбора данных и обучения
-├── test_api.py             # API тесты
-├── requirements.txt        # Зависимости Python
-├── spam_dataset.json       # Пример датасета для обучения
-├── docker-compose.yml      # Конфигурация Docker
-├── Dockerfile              # Docker-образ приложения
-└── redis.conf              # Конфигурация Redis
+├── main.py                 # FastAPI application and Web UI
+├── core.py                 # Core classification logic
+├── train_model.py          # Script for data collection and training
+├── test_api.py             # API tests
+├── requirements.txt        # Python dependencies
+├── spam_dataset.json       # Sample dataset for training
+├── docker-compose.yml      # Docker configuration
+├── Dockerfile              # Application Docker image
+└── redis.conf              # Redis configuration
 ```
 
 ### Code Style
-Проект использует **Black** для форматирования и **flake8** для линтинга.
+The project uses **Black** for formatting and **flake8** for linting.
 
-## 🐛 Известные проблемы
+## 🐛 Known Issues
 
-1. **Холодный старт модели** - первая загрузка Sentence Transformers может занять время.
-2. **Память для векторов** - большие датасеты требуют много RAM в Redis.
-3. **Rate limits dev.to** - возможны ограничения при сборе большого объема данных.
+1. **Model cold start** - the first load of Sentence Transformers can take time.
+2. **Memory for vectors** - large datasets require a lot of RAM in Redis.
+3. **dev.to rate limits** - possible limitations when collecting a large amount of data.
 
 ## 🗺️ Roadmap
 
 ### v2.0
-- [ ] Поддержка других источников (Reddit, HackerNews)
-- [ ] Трансформеры вместо k-NN
-- [ ] Объяснимость предсказаний (LIME/SHAP)
-- [ ] A/B тестирование моделей
+- [ ] Support for other sources (Reddit, HackerNews)
+- [ ] Transformers instead of k-NN
+- [ ] Prediction explainability (LIME/SHAP)
+- [ ] A/B testing of models
 
 ### v2.1  
-- [ ] Поддержка изображений в постах
-- [ ] Детекция плагиата
-- [ ] Интеграция с Slack/Discord для уведомлений
-- [ ] Мультиязычная поддержка
+- [ ] Support for images in posts
+- [ ] Plagiarism detection
+- [ ] Integration with Slack/Discord for notifications
+- [ ] Multilingual support
 
-## 📄 Лицензия
+## 📄 License
 
-MIT License - см. файл [LICENSE](LICENSE)
+MIT License - see the [LICENSE](LICENSE) file.

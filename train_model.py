@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Скрипт для обучения модели классификации спама
-Собирает данные с dev.to и создает обучающий датасет
+Script to train the spam classification model.
+It collects data from dev.to and creates a training dataset.
 """
 
 import asyncio
@@ -32,7 +32,7 @@ class DevToDataCollector:
             await self.session.close()
     
     async def fetch_articles(self, page: int = 1, per_page: int = 30, tag: str = None) -> List[Dict]:
-        """Получение статей с dev.to"""
+        """Fetches articles from dev.to"""
         url = f"{self.base_url}/articles"
         params = {
             'page': page,
@@ -53,7 +53,7 @@ class DevToDataCollector:
             return []
     
     async def fetch_article_details(self, article_id: int) -> Dict:
-        """Получение детальной информации о статье"""
+        """Fetches detailed information about an article"""
         url = f"{self.base_url}/articles/{article_id}"
         
         try:
@@ -68,10 +68,10 @@ class DevToDataCollector:
             return {}
     
     async def collect_training_data(self, num_pages: int = 50) -> List[Dict]:
-        """Сбор данных для обучения"""
+        """Collects data for training"""
         all_articles = []
         
-        # Собираем статьи по популярным тегам
+        # Collect articles by popular tags
         tags = ['python', 'javascript', 'react', 'nodejs', 'webdev', 'tutorial', 
                 'beginners', 'programming', 'ai', 'career']
         
@@ -85,7 +85,7 @@ class DevToDataCollector:
                 all_articles.extend(articles)
                 await asyncio.sleep(0.5)  # Rate limiting
         
-        # Собираем также общие статьи
+        # Collect general articles as well
         logger.info("Collecting general articles")
         for page in range(1, 20):
             articles = await self.fetch_articles(page=page)
@@ -99,7 +99,7 @@ class DevToDataCollector:
         return all_articles
 
 class SpamLabelGenerator:
-    """Генератор меток для обучения на основе эвристик"""
+    """Generates labels for training based on heuristics"""
     
     def __init__(self):
         self.spam_keywords = [
@@ -117,42 +117,42 @@ class SpamLabelGenerator:
         ]
     
     def calculate_spam_score(self, article: Dict) -> float:
-        """Расчет вероятности спама (0-1)"""
+        """Calculates the probability of spam (0-1)"""
         score = 0.0
         
         title = article.get('title', '').lower()
         description = article.get('description', '').lower()
         tags = [tag.lower() for tag in article.get('tag_list', [])]
         
-        # Проверяем спам-слова в заголовке (высокий вес)
+        # Check for spam words in the title (high weight)
         for keyword in self.spam_keywords:
             if keyword in title:
                 score += 0.3
             if keyword in description:
                 score += 0.2
         
-        # Проверяем качественные индикаторы (снижают вероятность спама)
+        # Check for quality indicators (reduce the probability of spam)
         for indicator in self.quality_indicators:
             if indicator in title:
                 score -= 0.2
             if indicator in description:
                 score -= 0.1
         
-        # Анализ метрик вовлеченности
+        # Analyze engagement metrics
         reading_time = article.get('reading_time_minutes', 0)
         reactions = article.get('public_reactions_count', 0)
         comments = article.get('comments_count', 0)
         
-        # Очень короткие посты с низким вовлечением
+        # Very short posts with low engagement
         if reading_time < 2 and reactions < 5:
             score += 0.3
         
-        # Хорошее вовлечение снижает вероятность спама
+        # Good engagement reduces the probability of spam
         if reactions > 50 or comments > 10:
             score -= 0.2
         
-        # Анализ тегов
-        if len(tags) > 10:  # Слишком много тегов
+        # Analyze tags
+        if len(tags) > 10:  # Too many tags
             score += 0.2
         
         suspicious_tags = ['money', 'earn', 'profit', 'investment', 'trading']
@@ -160,29 +160,29 @@ class SpamLabelGenerator:
             if any(sus_tag in tag for sus_tag in suspicious_tags):
                 score += 0.1
         
-        # Анализ автора
+        # Analyze the author
         user = article.get('user', {})
         if user:
             followers = user.get('followers_count', 0)
-            if followers < 10:  # Новый пользователь
+            if followers < 10:  # New user
                 score += 0.1
         
-        # Анализ даты публикации
+        # Analyze the publication date
         try:
             published_at = datetime.fromisoformat(article.get('published_at', '').replace('Z', '+00:00'))
             days_old = (datetime.now(published_at.tzinfo) - published_at).days
-            if days_old < 1:  # Очень свежий пост
+            if days_old < 1:  # Very recent post
                 score += 0.1
         except:
             pass
         
-        return min(max(score, 0.0), 1.0)  # Ограничиваем 0-1
+        return min(max(score, 0.0), 1.0)  # Clamp between 0 and 1
     
     def generate_label(self, article: Dict) -> int:
-        """Генерация метки (0 = не спам, 1 = спам)"""
+        """Generates a label (0 = not spam, 1 = spam)"""
         spam_score = self.calculate_spam_score(article)
         
-        # Добавляем немного случайности для разнообразия
+        # Add some randomness for variety
         noise = random.uniform(-0.1, 0.1)
         final_score = spam_score + noise
         
@@ -194,12 +194,12 @@ class ModelTrainer:
         self.label_generator = SpamLabelGenerator()
     
     async def prepare_training_data(self, articles: List[Dict]) -> List[tuple]:
-        """Подготовка данных для обучения"""
+        """Prepares data for training"""
         training_data = []
         
         for article in articles:
             try:
-                # Преобразуем в DevToPost
+                # Convert to DevToPost
                 post = DevToPost(**{
                     'id': article.get('id'),
                     'title': article.get('title', ''),
@@ -213,8 +213,8 @@ class ModelTrainer:
                     'published_at': article.get('published_at')
                 })
                 
-                # Генерируем метку
-                # Если пост из нашего датасета, он точно спам
+                # Generate a label
+                # If the post is from our dataset, it's definitely spam
                 if article.get("is_known_spam"):
                     label = 1
                 else:
@@ -229,7 +229,7 @@ class ModelTrainer:
         return training_data
     
     async def train_model(self, training_data: List[tuple]):
-        """Обучение модели"""
+        """Trains the model"""
         await self.redis_classifier.init_redis()
         
         logger.info(f"Training model with {len(training_data)} samples")
@@ -239,10 +239,10 @@ class ModelTrainer:
         
         for post, label in training_data:
             try:
-                # Векторизуем пост
+                # Vectorize the post
                 vector, _ = await self.redis_classifier.vectorize_post(post)
                 
-                # Сохраняем в Redis
+                # Save to Redis
                 await self.redis_classifier.store_training_vector(post.id, vector, label, post.title, post.url)
                 
                 if label == 1:
@@ -252,7 +252,7 @@ class ModelTrainer:
                 if total_count % 100 == 0:
                     logger.info(f"Processed {total_count} samples")
                 
-                # Небольшая задержка для предотвращения перегрузки
+                # A small delay to prevent overload
                 await asyncio.sleep(0.01)
                 
             except Exception as e:
@@ -265,7 +265,7 @@ class ModelTrainer:
         logger.info(f"Non-spam samples: {total_count-spam_count} ({(total_count-spam_count)/total_count*100:.1f}%)")
     
     async def evaluate_model(self, test_data: List[tuple]) -> Dict[str, float]:
-        """Оценка качества модели"""
+        """Evaluates the model's quality"""
         classifier = RediSearchClassifier(self.redis_classifier)
         
         true_positives = false_positives = true_negatives = false_negatives = 0
@@ -287,7 +287,7 @@ class ModelTrainer:
                 logger.error(f"Error evaluating post {post.id}: {e}")
                 continue
         
-        # Расчет метрик
+        # Calculate metrics
         total = true_positives + false_positives + true_negatives + false_negatives
         accuracy = (true_positives + true_negatives) / max(total, 1)
         precision = true_positives / max(true_positives + false_positives, 1)
@@ -309,7 +309,7 @@ import logging
 from typing import List, Dict, Any, Optional
 from asyncio import Queue
 
-# Специальный обработчик для перенаправления логов в очередь
+# Special handler to redirect logs to a queue
 class QueueLogHandler(logging.Handler):
     def __init__(self, queue: Queue):
         super().__init__()
@@ -319,12 +319,12 @@ class QueueLogHandler(logging.Handler):
         self.queue.put_nowait(self.format(record))
 
 async def main(classifier: Optional[RedisVectorClassifier] = None):
-    """Основная функция обучения"""
-    # Настройка логирования в файл
+    """Main training function"""
+    # Set up logging to a file
     log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    file_handler = logging.FileHandler("training.log", mode='w') # 'w' для перезаписи файла при каждом запуске
+    file_handler = logging.FileHandler("training.log", mode='w') # 'w' to overwrite the file on each run
     file_handler.setFormatter(log_formatter)
-    # Удаляем все предыдущие обработчики и добавляем наш
+    # Remove all previous handlers and add our own
     root_logger = logging.getLogger()
     root_logger.handlers = [file_handler]
     root_logger.setLevel(logging.INFO)
@@ -341,12 +341,12 @@ async def main(classifier: Optional[RedisVectorClassifier] = None):
         logger.error("Redis is not available. The training process cannot continue without a Redis connection.")
         return
     
-    # Сбор данных с dev.to
+    # Collect data from dev.to
     async with DevToDataCollector() as collector:
         logger.info("Collecting training data from dev.to")
         articles = await collector.collect_training_data(num_pages=30)
     
-    # Загрузка локального датасета со спамом
+    # Load the local spam dataset
     try:
         with open('spam_dataset.json', 'r', encoding='utf-8') as f:
             spam_articles = json.load(f)
@@ -361,19 +361,19 @@ async def main(classifier: Optional[RedisVectorClassifier] = None):
         logger.error("No articles collected or loaded, exiting")
         return
     
-    # Удаляем дубликаты
+    # Remove duplicates
     unique_articles = {article['id']: article for article in articles}.values()
     articles = list(unique_articles)
     logger.info(f"Using {len(articles)} unique articles in total")
     
-    # Подготовка данных
+    # Prepare data
     training_data = await trainer.prepare_training_data(articles)
     
     if not training_data:
         logger.error("No training data prepared, exiting")
         return
     
-    # Разделение на обучающую и тестовую выборки
+    # Split into training and test sets
     random.shuffle(training_data)
     split_index = int(len(training_data) * 0.8)
     train_data = training_data[:split_index]
@@ -382,10 +382,10 @@ async def main(classifier: Optional[RedisVectorClassifier] = None):
     logger.info(f"Training set: {len(train_data)} samples")
     logger.info(f"Test set: {len(test_data)} samples")
     
-    # Обучение
+    # Training
     await trainer.train_model(train_data)
     
-    # Оценка
+    # Evaluation
     logger.info("Evaluating model performance")
     metrics = await trainer.evaluate_model(test_data)
     
@@ -395,7 +395,7 @@ async def main(classifier: Optional[RedisVectorClassifier] = None):
     logger.info(f"Recall: {metrics['recall']:.3f}")
     logger.info(f"F1-Score: {metrics['f1_score']:.3f}")
     
-    # Сохранение результатов
+    # Save results
     results = {
         'timestamp': datetime.now().isoformat(),
         'training_samples': len(train_data),
@@ -410,7 +410,6 @@ async def main(classifier: Optional[RedisVectorClassifier] = None):
     logger.info("Results saved to training_results.json")
 
 if __name__ == "__main__":
-    # Создаем экземпляр классификатора и запускаем обучение
+    # Create a classifier instance and start training
     redis_classifier = RedisVectorClassifier()
     asyncio.run(main(redis_classifier))
-

@@ -14,11 +14,11 @@ from core import (
     RedisVectorClassifier, RediSearchClassifier, SimilarPostInfo
 )
 
-# Настройка логирования
+# Logging setup
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# FastAPI приложение
+# FastAPI app
 app = FastAPI(
     title="Dev.to Spam Classifier API",
     description="AI-powered spam detection for dev.to posts using Redis 8 Vector Sets",
@@ -27,51 +27,51 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# CORS для фронтенда
+# CORS for frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # В продакшене указать конкретные домены
+    allow_origins=["*"],  # In production, specify your frontend's domain
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Глобальные объекты
+# Global objects
 redis_classifier = RedisVectorClassifier()
 classifier = RediSearchClassifier(redis_classifier)
 
 @app.on_event("startup")
 async def startup_event():
-    """Инициализация при запуске"""
+    """Initialization on startup"""
     await redis_classifier.init_redis()
     logger.info("Application started successfully")
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Очистка при остановке"""
+    """Cleanup on shutdown"""
     if redis_classifier.redis_client:
         await redis_classifier.redis_client.close()
     logger.info("Application shut down")
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
-    """Главная страница с интерфейсом"""
+    """Main page with the interface"""
     with open("index.html", encoding="utf-8") as f:
         return HTMLResponse(content=f.read(), status_code=200)
 
 @app.post("/train")
 async def trigger_training(background_tasks: BackgroundTasks):
-    """Запуск процесса обучения модели в фоновом режиме"""
+    """Starts the model training process in the background"""
     logger.info("Received request to start model training.")
     
-    # Запускаем обучение в фоновой задаче, передавая существующий классификатор
+    # Start training in a background task, passing the existing classifier
     background_tasks.add_task(run_training, classifier=redis_classifier)
     
     return {"message": "Model training started in the background. Check logs for progress."}
 
 @app.get("/get-logs")
 async def get_logs():
-    """Чтение и возврат файла с логами"""
+    """Reads and returns the log file"""
     try:
         with open("training.log", "r") as f:
             return HTMLResponse(content=f.read(), media_type="text/plain")
@@ -80,14 +80,14 @@ async def get_logs():
 
 @app.post("/classify", response_model=ClassificationResult)
 async def classify_post(post: DevToPost):
-    """Классификация одного поста"""
+    """Classifies a single post"""
     import time
     start_time = time.time()
     
     try:
         prediction, confidence, reasoning, similar_posts_data = await classifier.predict(post)
         
-        # Определяем рекомендацию
+        # Determine recommendation
         if confidence >= 0.8:
             recommendation = "block" if prediction == 1 else "approve"
         else:
@@ -98,7 +98,7 @@ async def classify_post(post: DevToPost):
         # The data from `predict` is already a list of SimilarPostInfo objects
         similar_posts = similar_posts_data
 
-        # Проверяем наличие обратной связи от модератора
+        # Check for moderator feedback
         moderator_verdict = None
         if redis_classifier.redis_client:
             feedback_key = f"feedback:{post.id}"
@@ -118,7 +118,7 @@ async def classify_post(post: DevToPost):
             moderator_verdict=moderator_verdict
         )
         
-        # Асинхронно обновляем статистику в Redis
+        # Asynchronously update stats in Redis
         if redis_classifier.redis_client:
             async def update_stats():
                 try:
@@ -131,14 +131,11 @@ async def classify_post(post: DevToPost):
                 except Exception as e:
                     logger.error(f"Failed to update stats in Redis: {e}")
             
-            background_tasks = BackgroundTasks()
-            background_tasks.add_task(update_stats)
-            # Это нужно для FastAPI, чтобы задача выполнилась в фоне
-            # В данном контексте вызов будет выглядеть так:
+            # In a real FastAPI app, you'd use BackgroundTasks like this:
             # response = JSONResponse(result.dict())
             # response.background = background_tasks
-            # Но для простоты мы просто вызовем ее напрямую
-            await update_stats() # Упрощенный вызов для данного примера
+            # But for simplicity, we'll just call it directly here.
+            await update_stats()
 
         logger.info(f"Classified post {post.id}: {'SPAM' if prediction else 'OK'} ({confidence:.2f})")
         
@@ -150,12 +147,12 @@ async def classify_post(post: DevToPost):
 
 @app.post("/classify-batch")
 async def classify_batch(request: BatchClassificationRequest):
-    """Пакетная классификация постов"""
+    """Batch classification of posts"""
     results = []
     
     for post in request.posts:
         try:
-            prediction, confidence, reasoning = await classifier.predict(post)
+            prediction, confidence, reasoning, _ = await classifier.predict(post) # similar_posts are not needed here
             
             recommendation = "block" if prediction == 1 and confidence >= request.threshold else \
                            "approve" if prediction == 0 and confidence >= request.threshold else "review"
@@ -179,11 +176,11 @@ async def classify_batch(request: BatchClassificationRequest):
 
 @app.post("/feedback")
 async def moderator_feedback(feedback: ModeratorFeedback):
-    """Обратная связь от модератора для улучшения модели"""
+    """Moderator feedback to improve the model"""
     if not redis_classifier.redis_client:
         raise HTTPException(status_code=503, detail="Redis is not available. Cannot record feedback.")
     try:
-        # Сохраняем обратную связь
+        # Save feedback
         feedback_key = f"feedback:{feedback.post_id}"
         feedback_data = {
             "post_id": feedback.post_id,
@@ -208,12 +205,12 @@ async def moderator_feedback(feedback: ModeratorFeedback):
 
 @app.get("/stats", response_model=StatsResponse)
 async def get_stats():
-    """Статистика классификации"""
+    """Classification statistics"""
     total_classified = 0
     spam_detected = 0
     accuracy = None
 
-    # Пытаемся получить статистику из Redis
+    # Try to get stats from Redis
     if redis_classifier.redis_client:
         try:
             total_classified_bytes, spam_detected_bytes = await redis_classifier.redis_client.mget(
@@ -223,9 +220,9 @@ async def get_stats():
             spam_detected = int(spam_detected_bytes) if spam_detected_bytes else 0
         except Exception as e:
             logger.error(f"Failed to get stats from Redis: {e}")
-            # Не прерываем выполнение, просто вернем нули
+            # Don't interrupt execution, just return zeros
 
-    # Пытаемся прочитать точность из файла результатов обучения
+    # Try to read accuracy from the training results file
     try:
         with open("training_results.json", "r") as f:
             results = json.load(f)
@@ -242,15 +239,15 @@ async def get_stats():
 
 @app.get("/health")
 async def health_check():
-    """Проверка здоровья сервиса"""
+    """Service health check"""
     if not redis_classifier.redis_client:
         return {
-            "status": "healthy", # Приложение работает, но без Redis
+            "status": "healthy", # App is running, but without Redis
             "redis": "disconnected",
             "timestamp": datetime.now().isoformat()
         }
     try:
-        # Проверяем соединение с Redis
+        # Check connection to Redis
         await redis_classifier.redis_client.ping()
         
         return {
@@ -270,7 +267,7 @@ async def health_check():
 
 @app.get("/redis-info")
 async def get_redis_info():
-    """Получение информации о Redis"""
+    """Get information about Redis"""
     if not redis_classifier.redis_client:
         return {
             "redis_version": "N/A",
