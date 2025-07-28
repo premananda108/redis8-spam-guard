@@ -1,7 +1,6 @@
 fastapi
 uvicorn
-redis
-aioredis
+redis[search]==5.0.4
 numpy
 sentence-transformers
 pydantic

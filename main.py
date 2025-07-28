@@ -1,11 +1,12 @@
-import aioredis
+import json
+import logging
+import uvicorn
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from datetime import datetime
-import json
-import logging
-import uvicorn
+from redis.exceptions import ResponseError
+
 from train_model import main as run_training
 from core import (
     DevToPost, ClassificationResult, ModeratorFeedback,
@@ -287,14 +288,17 @@ async def get_redis_info():
         info = await redis_classifier.redis_client.info()
         num_vectors = 0
         try:
-            index_info = await redis_classifier.redis_client.execute_command("FT.INFO", redis_classifier.index_name)
-            # Преобразуем список в словарь для удобного доступа
-            index_info_dict = {index_info[i]: index_info[i+1] for i in range(0, len(index_info), 2)}
-            num_vectors = index_info_dict.get(b'num_docs', 0)
-        except aioredis.exceptions.ResponseError as e:
-            if "Unknown Index name" not in str(e):
-                raise # Пробрасываем неожиданные ошибки
-            # Если индекс не найден, количество векторов равно 0
+            # FT.INFO response is a list of key-value pairs
+            raw_index_info = await redis_classifier.redis_client.execute_command("FT.INFO", redis_classifier.index_name)
+            # Convert the list to a dictionary for easier access
+            index_info_dict = {raw_index_info[i]: raw_index_info[i+1] for i in range(0, len(raw_index_info), 2)}
+            num_vectors = int(index_info_dict.get('num_docs', 0))
+        except ResponseError as e:
+            # This is expected if the index doesn't exist yet
+            if "Unknown Index name" in str(e) or "no such index" in str(e):
+                num_vectors = 0
+            else:
+                raise  # Re-raise other unexpected errors
 
         return {
             "redis_version": info.get("redis_version"),

@@ -1,14 +1,19 @@
-from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Any
-from datetime import datetime
+import os
 import logging
 import re
 import numpy as np
 from sentence_transformers import SentenceTransformer
 import asyncio
-import aioredis
+from redis import asyncio as redis
 import requests
 from collections import Counter
+from pydantic import BaseModel, Field
+from typing import List, Optional, Dict, Any, Tuple
+from datetime import datetime
+from redis.commands.search.query import Query
+from redis.commands.search.field import VectorField, TagField, TextField
+from redis.commands.search.indexDefinition import IndexDefinition, IndexType
+import aiohttp
 
 # --- Singleton for SentenceTransformer Model ---
 class ModelSingleton:
@@ -74,56 +79,48 @@ class StatsResponse(BaseModel):
 
 class RedisVectorClassifier:
     def __init__(self):
+        self.redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
         self.redis_client = None
-        self.model = ModelSingleton.get_instance()  # Используем синглтон
+        self.model = ModelSingleton.get_instance()
         self.vector_dim = 384 + 3
-        self.index_name = "post_vectors"''
+        self.index_name = "post_vectors"
 
     async def init_redis(self):
-        """Асинхронная инициализация Redis и создание индекса"""
+        """Инициализация асинхронного клиента Redis и проверка индекса."""
+        if self.redis_client:
+            return
         try:
-            # Добавляем таймаут, чтобы приложение не висело долго
-            self.redis_client = await asyncio.wait_for(
-                aioredis.from_url(
-                    "redis://localhost:6379",
-                    decode_responses=False
-                ),
-                timeout=2.0  # 2 секунды на подключение
-            )
-            await self.redis_client.ping() # Проверяем, что соединение живое
-            logger.info("Redis connection established")
+            self.redis_client = redis.from_url(self.redis_url, decode_responses=True)
+            await self.redis_client.ping()
+            logger.info(f"Successfully connected to Redis at {self.redis_url}")
             await self.create_index()
-        except (aioredis.exceptions.RedisError, asyncio.TimeoutError) as e:
-            logger.warning(f"Could not connect to Redis: {e}. Application will run in degraded mode (no Redis features).")
-            self.redis_client = None
         except Exception as e:
-            logger.error(f"An unexpected error occurred during Redis initialization: {e}")
+            logger.error(f"Failed to connect to Redis or create index: {e}")
             self.redis_client = None
 
     async def create_index(self):
-        """Создание индекса RediSearch для векторов"""
+        """Создание индекса RediSearch, если он не существует."""
         if not self.redis_client:
+            logger.error("Cannot create index, Redis client is not initialized.")
             return
         try:
-            # Проверяем, существует ли индекс
-            await self.redis_client.execute_command("FT.INFO", self.index_name)
+            await self.redis_client.ft(self.index_name).info()
             logger.info(f"Index '{self.index_name}' already exists.")
-        except aioredis.exceptions.ResponseError as e:
-            # Индекс не существует, создаем его, если ошибка об этом
-            if "Unknown Index name" in str(e) or "no such index" in str(e):
-                logger.info(f"Index '{self.index_name}' not found. Creating it.")
+        except Exception as e:
+            error_message = str(e).lower()
+            if "unknown index name" in error_message or "no such index" in error_message:
+                logger.info(f"Index '{self.index_name}' not found, creating new one.")
                 schema = (
-                    "vector", "VECTOR", "HNSW", "6", "TYPE", "FLOAT32", "DIM", str(self.vector_dim), "DISTANCE_METRIC", "L2",
-                    "label", "TAG",
-                    "title", "TEXT", 
-                    "url", "TAG"
+                    VectorField("vector", "HNSW", {"TYPE": "FLOAT32", "DIM": self.vector_dim, "DISTANCE_METRIC": "COSINE"}),
+                    TagField("label"),
+                    TextField("title"),
+                    TagField("url")
                 )
-                await self.redis_client.execute_command(
-                    "FT.CREATE", self.index_name, "ON", "HASH", "PREFIX", "1", "post:", "SCHEMA", *schema
-                )
+                definition = IndexDefinition(prefix=["post:"], index_type=IndexType.HASH)
+                await self.redis_client.ft(self.index_name).create_index(fields=schema, definition=definition)
+                logger.info(f"Index '{self.index_name}' created successfully.")
             else:
-                # Если другая ошибка, то пробрасываем ее
-                logger.error(f"An unexpected Redis error occurred: {e}")
+                logger.error(f"An unexpected error occurred while checking for index: {e}")
                 raise
 
     def preprocess_text(self, text: Optional[str]) -> str:
@@ -132,7 +129,7 @@ class RedisVectorClassifier:
             return ""
         
         text = re.sub(r'<[^>]+>', '', text)
-        text = re.sub(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', '', text)
+        text = re.sub(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', '', text)
         text = re.sub(r'\s+', ' ', text)
         text = text.lower().strip()
         
@@ -147,9 +144,8 @@ class RedisVectorClassifier:
             'reading_time': post.reading_time_minutes,
             'reactions_count': post.public_reactions_count,
             'comments_count': post.comments_count,
-            # ВАЖНО: API статей не возвращает followers_count, это поле будет обновлено позже
-            'user_followers': -1, # Используем -1 как индикатор, что данные не были загружены
-            'user_id': post.user.get('id') if post.user else None # Правильное поле - 'id'
+            'user_followers': -1,
+            'user_id': post.user.get('id') if post.user else None
         }
 
     def get_spam_indicators(self, features: Dict[str, Any]) -> List[str]:
@@ -170,7 +166,6 @@ class RedisVectorClassifier:
         if len(features['tags']) > 10:
             indicators.append("Too many tags")
         
-        # Проверяем подписчиков, только если мы смогли их получить
         if features['user_followers'] != -1 and features['user_followers'] < 10:
             indicators.append(f"Low follower count ({features['user_followers']})")
             
@@ -192,7 +187,7 @@ class RedisVectorClassifier:
                 if user_response.status_code == 200:
                     user_data = user_response.json()
                     user_followers = user_data.get('followers_count', 0)
-                    features['user_followers'] = user_followers # Обновляем словарь!
+                    features['user_followers'] = user_followers
                     logger.info(f"Successfully fetched followers for user {user_id}: {user_followers}")
                 else:
                     logger.warning(f"Failed to fetch user data for user {user_id}")
@@ -208,7 +203,7 @@ class RedisVectorClassifier:
         
         numeric_features = np.array([
             features['reading_time'],
-            user_followers if user_followers != -1 else 0, # Используем 0, если не удалось получить
+            user_followers if user_followers != -1 else 0,
             len(features['tags'])
         ], dtype=np.float32)
         
@@ -249,8 +244,6 @@ class RedisVectorClassifier:
             )
             
             similar_posts = []
-            # The response is a list: [count, doc1, [fields1], doc2, [fields2], ...]
-            # We iterate through the documents, skipping the count at the beginning.
             for i in range(1, len(results), 2):
                 try:
                     post_key = results[i].decode('utf-8')
@@ -258,7 +251,6 @@ class RedisVectorClassifier:
                     
                     fields = results[i+1]
                     
-                    # Создаем словарь из полей для удобного доступа
                     fields_dict = {fields[j].decode('utf-8'): fields[j+1].decode('utf-8') for j in range(0, len(fields), 2)}
                     
                     similar_posts.append({
@@ -284,26 +276,24 @@ class RediSearchClassifier:
         self.redis_classifier = redis_classifier
         self.k = k
     
-    async def predict(self, post: DevToPost) -> tuple[int, float, List[str], List[str]]:
+    async def predict(self, post: DevToPost) -> tuple[int, float, List[str], List[SimilarPostInfo]]:
         """Предсказание класса поста"""
         import time
         start_time = time.time()
         
         try:
-            # Теперь получаем и вектор, и обновленные признаки
             query_vector, features = await self.redis_classifier.vectorize_post(post)
             
-            similar_post_ids = []
+            similar_posts_info = []
 
-            # Если Redis доступен, ищем похожие посты
             if self.redis_classifier.redis_client:
                 similar_posts = await self.redis_classifier.find_similar_posts(query_vector, self.k)
                 logger.info(f"Found {len(similar_posts)} similar posts in Redis for post {post.id}")
                 
                 if similar_posts:
-                    similar_post_ids = [p['post_id'] for p in similar_posts]
                     labels = []
                     for post_data in similar_posts:
+                        similar_posts_info.append(SimilarPostInfo(**post_data))
                         label_bytes = await self.redis_classifier.redis_client.hget(f"post:{post_data['post_id']}", "label")
                         if label_bytes:
                             labels.append(label_bytes.decode('utf-8'))
@@ -314,20 +304,16 @@ class RediSearchClassifier:
                         predicted_label = 1 if predicted_label_str == "spam" else 0
                         confidence = label_counts[predicted_label_str] / len(labels)
                         
-                        # Логика для формирования развернутого ответа
                         if predicted_label == 1:
                             reasoning = ["Similar to known spam posts (via Redis)"]
                         else:
                             reasoning = ["Similar to legitimate posts (via Redis)"]
                         
-                        # Добавляем эвристические индикаторы как дополнительную информацию
                         heuristic_indicators = self.redis_classifier.get_spam_indicators(features)
                         reasoning.extend(heuristic_indicators)
                         
-                        return predicted_label, confidence, reasoning, similar_posts
+                        return predicted_label, confidence, reasoning, similar_posts_info
 
-            # Запасной вариант, если Redis недоступен или похожих постов не найдено
-            # Используем признаки, полученные из vectorize_post
             spam_indicators = self.redis_classifier.get_spam_indicators(features)
             
             num_indicators = len(spam_indicators)
@@ -341,7 +327,7 @@ class RediSearchClassifier:
             elif num_indicators == 2:
                 is_spam = 1
                 confidence = 0.7
-            else:  # 3 и более
+            else:
                 is_spam = 1
                 confidence = 0.9
             
