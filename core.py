@@ -244,14 +244,18 @@ class RedisVectorClassifier:
             )
             
             similar_posts = []
+            # The response is a list: [count, doc1, [fields1], doc2, [fields2], ...]
+            # We iterate through the documents, skipping the count at the beginning.
             for i in range(1, len(results), 2):
                 try:
-                    post_key = results[i].decode('utf-8')
+                    # results are already decoded because of `decode_responses=True`
+                    post_key = results[i]
                     post_id = post_key.split(':')[-1]
                     
                     fields = results[i+1]
                     
-                    fields_dict = {fields[j].decode('utf-8'): fields[j+1].decode('utf-8') for j in range(0, len(fields), 2)}
+                    # Create a dictionary from the fields for easy access
+                    fields_dict = {fields[j]: fields[j+1] for j in range(0, len(fields), 2)}
                     
                     similar_posts.append({
                         "post_id": post_id,
@@ -260,7 +264,7 @@ class RedisVectorClassifier:
                         "url": fields_dict.get('url', '')
                     })
 
-                except (ValueError, IndexError, AttributeError, UnicodeDecodeError) as e:
+                except (ValueError, IndexError, AttributeError) as e:
                     logger.warning(f"Could not parse a result from Redis search: {e}. Result item: {results[i]}")
                     continue
             
@@ -296,7 +300,7 @@ class RediSearchClassifier:
                         similar_posts_info.append(SimilarPostInfo(**post_data))
                         label_bytes = await self.redis_classifier.redis_client.hget(f"post:{post_data['post_id']}", "label")
                         if label_bytes:
-                            labels.append(label_bytes.decode('utf-8'))
+                            labels.append(label_bytes)
                     
                     if labels:
                         label_counts = Counter(labels)

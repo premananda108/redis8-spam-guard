@@ -95,15 +95,8 @@ async def classify_post(post: DevToPost):
         
         processing_time = (time.time() - start_time) * 1000
         
-        # Преобразуем данные о похожих постах в Pydantic модели
-        similar_posts = [
-            SimilarPostInfo(
-                post_id=p.get('post_id'), 
-                title=p.get('title'), 
-                url=p.get('url'), 
-                score=p.get('score')
-            ) for p in similar_posts_data
-        ]
+        # The data from `predict` is already a list of SimilarPostInfo objects
+        similar_posts = similar_posts_data
 
         # Проверяем наличие обратной связи от модератора
         moderator_verdict = None
