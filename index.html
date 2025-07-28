@@ -88,6 +88,28 @@
         let currentPage = 1;
         const postsPerPage = 10;
 
+        async function sendFeedback(postId, isSpam, buttonElement) {
+            try {
+                const response = await fetch('/feedback', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        post_id: postId,
+                        is_spam: isSpam,
+                        moderator_id: "moderator-007" // В будущем можно заменить на ID авторизованного пользователя
+                    })
+                });
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to send feedback');
+                }
+                // Визуально подтверждаем действие
+                buttonElement.parentElement.innerHTML = '<strong>✅ Thank you for your feedback!</strong>';
+            } catch (error) {
+                alert(`Error sending feedback: ${error.message}`);
+            }
+        }
+
         async function classifyPost(postData) {
             const response = await fetch('/classify', {
                 method: 'POST',
@@ -205,6 +227,7 @@
                 for (const post of posts) {
                     const postElement = document.createElement('div');
                     postElement.className = 'post loading';
+                    postElement.id = `post-${post.id}`;
                     postElement.innerHTML = `
                         <h3><a href="${post.url}" target="_blank">${post.title}</a></h3>
                         <p>${post.description || 'No description'}</p>
@@ -260,6 +283,11 @@
                                 </div>
                             ` : ''}
                             ${similarPostsHtml}
+                            <div class="feedback-controls" style="margin-top: 10px;">
+                                <span>Is this classification wrong?</span>
+                                <button onclick="sendFeedback(${post.id}, true, this)">Mark as SPAM</button>
+                                <button onclick="sendFeedback(${post.id}, false, this)">Mark as LEGITIMATE</button>
+                            </div>
                         `;
                     } catch (error) {
                         postElement.innerHTML += `<div style="color: red;">Error: ${error.message}</div>`;
