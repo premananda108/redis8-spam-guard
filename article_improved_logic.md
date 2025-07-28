@@ -58,15 +58,18 @@ We generated a `spam_dataset.json` file containing 50 diverse examples of blatan
 
 We then enhanced the training script to combine the "clean" data from dev.to with our "dirty" spam dataset. This allowed us to create a balanced sample on which the model could finally unleash its potential.
 
-## The Result: A Working and Reliable Model
+## The Result: A Balanced and Effective Model
 
-After training on the new, balanced dataset, we obtained the following metrics:
+After the latest training cycle on a balanced dataset, we achieved a significant breakthrough in performance. Here are the current metrics from `training_results.json`:
 
--   **Accuracy:** ~94%
--   **Precision:** **1.0** — a perfect result! This means the model made **zero false positives**, labeling a good post as spam.
--   **Recall:** **~30%** — the model successfully detected and classified one-third of all spam in the test set. This is a huge leap from zero and an excellent starting point for further improvements.
+-   **Accuracy:** **~94.1%** — The model correctly classifies the vast majority of posts, maintaining a high level of overall correctness.
+-   **Precision:** **~91.7%** — This is a crucial metric. It means that when the model flags a post as spam, it is correct about 92% of the time. We have a very low rate of "false positives," which is essential to avoid blocking legitimate content.
+-   **Recall:** **44.0%** — This is the most dramatic improvement. The model now successfully identifies and catches 44% of all spam in the test data, a massive leap from earlier iterations. This shows it has become much more effective at finding spam.
+-   **F1-Score:** **~59.5%** — This score, which represents the balance between Precision and Recall, has increased significantly, indicating a much more robust and well-rounded model.
 
-The resulting model is "cautious": it prefers to miss spam rather than block legitimate content. This is a critically important property for any moderation system.
+### Interpretation:
+
+The model has evolved from being overly cautious to being effectively balanced. It now catches a substantial amount of spam (`Recall`) while remaining highly reliable and trustworthy when it does flag content (`Precision`). This is the ideal behavior for a moderation assistant: it significantly reduces the moderator's workload by filtering out obvious spam, while rarely making mistakes that would require manual correction.
 
 In the end, by going from analyzing and fixing architectural flaws to enriching the data, we have created a truly working and reliable system for combating spam.
 
