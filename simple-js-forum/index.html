@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Simple JS Forum</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; max-width: 800px; margin: auto; padding: 20px; background-color: #f0f2f5; color: #1c1e21; }
+        h1 { color: #1877f2; }
+        #posts { margin-top: 20px; border-top: 1px solid #dddfe2; }
+        .post { background-color: #fff; padding: 15px; border-bottom: 1px solid #dddfe2; border-radius: 6px; margin-top: 15px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+        .post h3 { margin: 0 0 10px; color: #050505; }
+        .post p { margin: 0 0 10px; }
+        .post small { color: #65676b; }
+        form { display: flex; flex-direction: column; gap: 10px; background-color: #fff; padding: 20px; border-radius: 6px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+        input, textarea { padding: 12px; font-size: 1em; border: 1px solid #dddfe2; border-radius: 6px; }
+        textarea { resize: vertical; min-height: 80px; }
+        button { background-color: #1877f2; color: white; border: none; padding: 12px 20px; border-radius: 6px; font-size: 1em; font-weight: bold; cursor: pointer; }
+        button:hover { background-color: #166fe5; }
+    </style>
+</head>
+<body>
+    <h1>Simple JS Forum</h1>
+    
+    <form id="new-post-form">
+        <input type="text" id="author" placeholder="Your name" required>
+        <input type="text" id="title" placeholder="Post title" required>
+        <textarea id="content" placeholder="What's on your mind?" required></textarea>
+        <button type="submit">Create Post</button>
+    </form>
+
+    <div id="posts">
+        <!-- Posts will be loaded here -->
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:3000';
+        const postsContainer = document.getElementById('posts');
+        const newPostForm = document.getElementById('new-post-form');
+
+        // Function to fetch and render posts
+        async function fetchAndRenderPosts() {
+            try {
+                const response = await fetch(`${API_URL}/posts`);
+                if (!response.ok) throw new Error('Failed to fetch posts');
+                const posts = await response.json();
+                
+                postsContainer.innerHTML = ''; // Clear the container
+                posts.sort((a, b) => b.id.localeCompare(a.id)); // Sort to show newest first
+                
+                for (const post of posts) {
+                    const postDiv = document.createElement('div');
+                    postDiv.className = 'post';
+                    postDiv.innerHTML = `
+                        <h3>${escapeHtml(post.title)}</h3>
+                        <p>${escapeHtml(post.content)}</p>
+                        <small>by ${escapeHtml(post.author)}</small>
+                    `;
+                    postsContainer.appendChild(postDiv);
+                }
+            } catch (error) {
+                postsContainer.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
+            }
+        }
+
+        // Form submission handler
+        newPostForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            
+            const author = document.getElementById('author').value;
+            const title = document.getElementById('title').value;
+            const content = document.getElementById('content').value;
+
+            try {
+                const response = await fetch(`${API_URL}/posts`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ author, title, content })
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Failed to create post');
+                }
+
+                newPostForm.reset(); // Clear the form
+                await fetchAndRenderPosts(); // Refresh the post list
+            } catch (error) {
+                alert(`Error: ${error.message}`);
+            }
+        });
+
+        // Simple HTML escaping function to prevent XSS
+        function escapeHtml(unsafe) {
+            return unsafe
+                 .replace(/&/g, "&amp;")
+                 .replace(/</g, "&lt;")
+                 .replace(/>/g, "&gt;")
+                 .replace(/"/g, "&quot;")
+                 .replace(/'/g, "&#039;");
+        }
+
+        // Initial load of posts
+        fetchAndRenderPosts();
+    </script>
+</body>
+</html>

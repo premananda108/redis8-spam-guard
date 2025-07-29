@@ -1,0 +1,14 @@
+{
+  "name": "simple-js-forum",
+  "version": "1.0.0",
+  "description": "A simple forum using Node.js, Express, and Redis, ready for Spam Guard integration.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "redis": "^4.6.15"
+  }
+}
