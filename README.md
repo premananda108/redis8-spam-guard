@@ -89,34 +89,6 @@ Interface features:
 - `POST /classify`: Classify a single post.
 - `POST /classify-batch`: Batch classification of multiple posts.
 
-**Example request:**
-```bash
-curl -X POST "http://localhost:8000/classify" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "id": 123,
-    "title": "How to Learn Python",
-    "description": "A comprehensive guide...",
-    "tag_list": ["python", "tutorial"],
-    "reading_time_minutes": 10,
-    "public_reactions_count": 50,
-    "comments_count": 10,
-    "user": {"id": 456}
-  }'
-```
-
-**Example response:**
-```json
-{
-  "post_id": 123,
-  "is_spam": false,
-  "confidence": 0.95,
-  "recommendation": "approve",
-  "reasoning": ["Similar to legitimate posts (via Redis)"],
-  "processing_time_ms": 52.1
-}
-```
-
 #### Feedback
 - `POST /feedback`: Send moderator feedback for future model retraining.
 
@@ -177,20 +149,6 @@ The project uses **Black** for formatting and **flake8** for linting.
 1. **Model cold start** - the first load of Sentence Transformers can take time.
 2. **Memory for vectors** - large datasets require a lot of RAM in Redis.
 3. **dev.to rate limits** - possible limitations when collecting a large amount of data.
-
-## 🗺️ Roadmap
-
-### v2.0
-- [ ] Support for other sources (Reddit, HackerNews)
-- [ ] Transformers instead of k-NN
-- [ ] Prediction explainability (LIME/SHAP)
-- [ ] A/B testing of models
-
-### v2.1  
-- [ ] Support for images in posts
-- [ ] Plagiarism detection
-- [ ] Integration with Slack/Discord for notifications
-- [ ] Multilingual support
 
 ## 📄 License
 
