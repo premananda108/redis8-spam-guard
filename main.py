@@ -39,6 +39,7 @@ app.add_middleware(
 # Global objects
 redis_classifier = RedisVectorClassifier()
 classifier = RediSearchClassifier(redis_classifier)
+POST_CACHE = {} # Cache for storing full post data for feedback
 
 @app.on_event("startup")
 async def startup_event():
@@ -85,6 +86,9 @@ async def classify_post(post: DevToPost):
     start_time = time.time()
     
     try:
+        # Store post data in cache for potential feedback
+        POST_CACHE[str(post.id)] = post
+
         prediction, confidence, reasoning, similar_posts_data = await classifier.predict(post)
         
         # Determine recommendation
@@ -131,10 +135,6 @@ async def classify_post(post: DevToPost):
                 except Exception as e:
                     logger.error(f"Failed to update stats in Redis: {e}")
             
-            # In a real FastAPI app, you'd use BackgroundTasks like this:
-            # response = JSONResponse(result.dict())
-            # response.background = background_tasks
-            # But for simplicity, we'll just call it directly here.
             await update_stats()
 
         logger.info(f"Classified post {post.id}: {'SPAM' if prediction else 'OK'} ({confidence:.2f})")
@@ -179,9 +179,18 @@ async def moderator_feedback(feedback: ModeratorFeedback):
     """Moderator feedback to improve the model"""
     if not redis_classifier.redis_client:
         raise HTTPException(status_code=503, detail="Redis is not available. Cannot record feedback.")
+    
+    post_id_str = str(feedback.post_id)
+    post_data = POST_CACHE.get(post_id_str)
+
+    if not post_data:
+        raise HTTPException(status_code=404, detail=f"Post data for ID {post_id_str} not found in cache. Cannot record feedback for training.")
+
     try:
-        # Save feedback
-        feedback_key = f"feedback:{feedback.post_id}"
+        # Save feedback verdict and full post data for retraining
+        feedback_key = f"feedback:{post_id_str}"
+        post_data_key = f"post_data:{post_id_str}"
+
         feedback_data = {
             "post_id": feedback.post_id,
             "is_spam": feedback.is_spam,
@@ -190,14 +199,15 @@ async def moderator_feedback(feedback: ModeratorFeedback):
             "timestamp": datetime.now().isoformat()
         }
         
-        await redis_classifier.redis_client.set(
-            feedback_key, 
-            json.dumps(feedback_data)
-        )
+        # Use a pipeline for atomic operations
+        p = redis_classifier.redis_client.pipeline()
+        p.set(feedback_key, json.dumps(feedback_data))
+        p.set(post_data_key, post_data.model_dump_json()) # Use model_dump_json for Pydantic v2
+        await p.execute()
         
-        logger.info(f"Received feedback for post {feedback.post_id} from {feedback.moderator_id}")
+        logger.info(f"Received and stored full feedback for post {feedback.post_id} from {feedback.moderator_id}")
         
-        return {"status": "success", "message": "Feedback recorded"}
+        return {"status": "success", "message": "Feedback recorded for retraining"}
     
     except Exception as e:
         logger.error(f"Failed to record feedback: {e}")

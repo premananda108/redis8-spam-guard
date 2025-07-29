@@ -4,4 +4,5 @@ redis==5.0.4
 numpy
 sentence-transformers
 pydantic
-aiohttp
+aiohttp==3.9.5
+async-timeout

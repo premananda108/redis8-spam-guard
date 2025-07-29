@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """
 Script to train the spam classification model.
-It collects data from dev.to and creates a training dataset.
+It combines three data sources:
+1. Live data from dev.to, heuristically labeled.
+2. A local dataset of known spam (`spam_dataset.json`).
+3. Moderator feedback stored in Redis.
 """
 
 import asyncio
 import aiohttp
 import json
 import logging
-from typing import List, Dict, Any
-from datetime import datetime, timedelta
+from typing import List, Dict, Any, Optional, Tuple
+from datetime import datetime
 import numpy as np
 from core import DevToPost, RedisVectorClassifier, RediSearchClassifier
 import time
@@ -18,398 +21,314 @@ import random
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ==============================================================================
+# SECTION 1: DATA COLLECTION AND HEURISTIC LABELING
+# ==============================================================================
+
 class DevToDataCollector:
+    """Fetches recent articles from the dev.to API."""
     def __init__(self):
         self.base_url = "https://dev.to/api"
         self.session = None
-        
+
     async def __aenter__(self):
         self.session = aiohttp.ClientSession()
         return self
-    
+
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if self.session:
             await self.session.close()
-    
-    async def fetch_articles(self, page: int = 1, per_page: int = 30, tag: str = None) -> List[Dict]:
-        """Fetches articles from dev.to"""
-        url = f"{self.base_url}/articles"
-        params = {
-            'page': page,
-            'per_page': per_page
-        }
-        if tag:
-            params['tag'] = tag
-        
+
+    async def fetch_articles(self, page: int = 1, per_page: int = 30) -> List[Dict]:
+        """Fetches a single page of articles."""
+        url = f"{self.base_url}/articles/latest"
+        params = {'page': page, 'per_page': per_page}
         try:
             async with self.session.get(url, params=params) as response:
                 if response.status == 200:
                     return await response.json()
                 else:
-                    logger.error(f"Failed to fetch articles: {response.status}")
+                    logger.error(f"Failed to fetch articles (page {page}): {response.status}")
                     return []
         except Exception as e:
-            logger.error(f"Error fetching articles: {e}")
+            logger.error(f"Error fetching articles (page {page}): {e}")
             return []
-    
-    async def fetch_article_details(self, article_id: int) -> Dict:
-        """Fetches detailed information about an article"""
-        url = f"{self.base_url}/articles/{article_id}"
-        
-        try:
-            async with self.session.get(url) as response:
-                if response.status == 200:
-                    return await response.json()
-                else:
-                    logger.error(f"Failed to fetch article {article_id}: {response.status}")
-                    return {}
-        except Exception as e:
-            logger.error(f"Error fetching article {article_id}: {e}")
-            return {}
-    
-    async def collect_training_data(self, num_pages: int = 50) -> List[Dict]:
-        """Collects data for training"""
+
+    async def collect_training_data(self, num_articles: int = 1000) -> List[Dict]:
+        """Collects a target number of articles from dev.to."""
         all_articles = []
+        per_page = 100 # Fetch more per page to be efficient
+        num_pages = (num_articles + per_page - 1) // per_page
         
-        # Collect articles by popular tags
-        tags = ['python', 'javascript', 'react', 'nodejs', 'webdev', 'tutorial', 
-                'beginners', 'programming', 'ai', 'career']
-        
-        for tag in tags:
-            logger.info(f"Collecting articles for tag: {tag}")
-            for page in range(1, min(num_pages // len(tags) + 1, 10)):
-                articles = await self.fetch_articles(page=page, tag=tag)
-                if not articles:
-                    break
-                
-                all_articles.extend(articles)
-                await asyncio.sleep(0.5)  # Rate limiting
-        
-        # Collect general articles as well
-        logger.info("Collecting general articles")
-        for page in range(1, 20):
-            articles = await self.fetch_articles(page=page)
+        logger.info(f"Starting data collection from dev.to, aiming for ~{num_articles} articles.")
+        for page in range(1, num_pages + 1):
+            logger.info(f"Fetching page {page}/{num_pages}...")
+            articles = await self.fetch_articles(page=page, per_page=per_page)
             if not articles:
+                logger.warning("No more articles returned from API. Stopping collection.")
                 break
-            
             all_articles.extend(articles)
-            await asyncio.sleep(0.5)
-        
-        logger.info(f"Collected {len(all_articles)} articles")
+            await asyncio.sleep(0.5)  # Basic rate limiting
+
+        logger.info(f"Collected {len(all_articles)} articles from dev.to.")
         return all_articles
 
 class SpamLabelGenerator:
-    """Generates labels for training based on heuristics"""
-    
+    """
+    Generates spam labels for articles based on a set of heuristics.
+    This creates the "dirty" dataset for broad training.
+    """
     def __init__(self):
         self.spam_keywords = [
-            'earn money', 'make money', 'get rich', 'free money', 'easy money',
-            'click here', 'buy now', 'limited time', 'act now', 'urgent',
-            'guaranteed', 'no risk', 'work from home', 'side hustle',
-            'crypto trading', 'bitcoin profit', 'investment opportunity',
-            'affiliate marketing', 'dropshipping course', 'make $1000'
+            'earn money', 'make money', 'get rich', 'free money', 'click here', 
+            'buy now', 'limited time', 'guaranteed', 'no risk', 'work from home', 
+            'crypto trading', 'bitcoin profit', 'investment opportunity', 'urgent'
         ]
-        
         self.quality_indicators = [
-            'tutorial', 'guide', 'how to', 'best practices', 'tips',
-            'introduction to', 'getting started', 'deep dive',
-            'comprehensive', 'step by step', 'beginner', 'advanced'
+            'tutorial', 'guide', 'how to', 'best practices', 'deep dive', 
+            'introduction', 'getting started', 'step-by-step'
         ]
-    
+
     def calculate_spam_score(self, article: Dict) -> float:
-        """Calculates the probability of spam (0-1)"""
+        """Calculates a spam score based on heuristics."""
         score = 0.0
-        
         title = article.get('title', '').lower()
         description = article.get('description', '').lower()
-        tags = [tag.lower() for tag in article.get('tag_list', [])]
         
-        # Check for spam words in the title (high weight)
         for keyword in self.spam_keywords:
-            if keyword in title:
-                score += 0.3
-            if keyword in description:
-                score += 0.2
+            if keyword in title or keyword in description:
+                score += 0.4
         
-        # Check for quality indicators (reduce the probability of spam)
         for indicator in self.quality_indicators:
             if indicator in title:
                 score -= 0.2
-            if indicator in description:
-                score -= 0.1
         
-        # Analyze engagement metrics
-        reading_time = article.get('reading_time_minutes', 0)
-        reactions = article.get('public_reactions_count', 0)
-        comments = article.get('comments_count', 0)
-        
-        # Very short posts with low engagement
-        if reading_time < 2 and reactions < 5:
+        if article.get('reading_time_minutes', 0) < 2 and article.get('public_reactions_count', 0) < 3:
             score += 0.3
-        
-        # Good engagement reduces the probability of spam
-        if reactions > 50 or comments > 10:
-            score -= 0.2
-        
-        # Analyze tags
-        if len(tags) > 10:  # Too many tags
-            score += 0.2
-        
-        suspicious_tags = ['money', 'earn', 'profit', 'investment', 'trading']
-        for tag in tags:
-            if any(sus_tag in tag for sus_tag in suspicious_tags):
-                score += 0.1
-        
-        # Analyze the author
-        user = article.get('user', {})
-        if user:
-            followers = user.get('followers_count', 0)
-            if followers < 10:  # New user
-                score += 0.1
-        
-        # Analyze the publication date
-        try:
-            published_at = datetime.fromisoformat(article.get('published_at', '').replace('Z', '+00:00'))
-            days_old = (datetime.now(published_at.tzinfo) - published_at).days
-            if days_old < 1:  # Very recent post
-                score += 0.1
-        except:
-            pass
-        
-        return min(max(score, 0.0), 1.0)  # Clamp between 0 and 1
-    
+            
+        if not article.get('description'):
+             score += 0.2
+
+        user_followers = article.get('user', {}).get('followers_count', 0)
+        if user_followers < 5:
+            score += 0.15
+
+        return min(max(score, 0.0), 1.0)
+
     def generate_label(self, article: Dict) -> int:
-        """Generates a label (0 = not spam, 1 = spam)"""
+        """Generates a final label (0 or 1) based on the score."""
         spam_score = self.calculate_spam_score(article)
+        return 1 if spam_score > 0.5 else 0
+
+async def prepare_data_from_articles(articles: List[Dict], label_generator: SpamLabelGenerator) -> List[Tuple[DevToPost, int]]:
+    """Converts raw article dicts into labeled training data."""
+    prepared_data = []
+    for article in articles:
+        try:
+            post = DevToPost(**article)
+            label = label_generator.generate_label(article)
+            prepared_data.append((post, label))
+        except Exception as e:
+            logger.error(f"Skipping invalid article from dev.to API (ID: {article.get('id')}): {e}")
+    return prepared_data
+
+# ==============================================================================
+# SECTION 2: MODERATOR DATA AND MODEL TRAINING
+# ==============================================================================
+
+async def get_moderator_labeled_data(redis_client) -> List[Tuple[DevToPost, int]]:
+    """Fetches posts labeled by moderators from Redis."""
+    labeled_data = []
+    logger.info("Searching for moderator-labeled posts in Redis...")
+    try:
+        # The client already decodes responses, so we work with strings
+        feedback_keys = [key async for key in redis_client.scan_iter("feedback:*")]
+        if not feedback_keys:
+            logger.info("No moderator feedback found in Redis.")
+            return []
+
+        logger.info(f"Found {len(feedback_keys)} feedback entries. Fetching full post data...")
         
-        # Add some randomness for variety
-        noise = random.uniform(-0.1, 0.1)
-        final_score = spam_score + noise
+        # Create keys for post data
+        post_data_keys = [f"post_data:{key.split(':')[1]}" for key in feedback_keys]
         
-        return 1 if final_score > 0.5 else 0
+        # Fetch all data in batches
+        all_feedback_json = await redis_client.mget(feedback_keys)
+        all_post_json = await redis_client.mget(post_data_keys)
+
+        for i, key in enumerate(feedback_keys):
+            post_id = key.split(":")[1]
+            post_json = all_post_json[i]
+            feedback_json = all_feedback_json[i]
+
+            if post_json and feedback_json:
+                try:
+                    post = DevToPost(**json.loads(post_json))
+                    label = 1 if json.loads(feedback_json).get("is_spam") else 0
+                    labeled_data.append((post, label))
+                except (json.JSONDecodeError, TypeError) as e:
+                    logger.error(f"Could not parse data for post {post_id}: {e}")
+            else:
+                 logger.warning(f"Missing feedback or post data for post ID {post_id}. Skipping.")
+
+    except Exception as e:
+        logger.error(f"An error occurred while fetching moderator data from Redis: {e}", exc_info=True)
+    
+    logger.info(f"Successfully loaded {len(labeled_data)} posts from moderator feedback.")
+    return labeled_data
 
 class ModelTrainer:
     def __init__(self, classifier: RedisVectorClassifier):
         self.redis_classifier = classifier
-        self.label_generator = SpamLabelGenerator()
     
-    async def prepare_training_data(self, articles: List[Dict]) -> List[tuple]:
-        """Prepares data for training"""
-        training_data = []
-        
-        for article in articles:
-            try:
-                # Convert to DevToPost
-                post = DevToPost(**{
-                    'id': article.get('id'),
-                    'title': article.get('title', ''),
-                    'description': article.get('description'),
-                    'tag_list': article.get('tag_list', []),
-                    'reading_time_minutes': article.get('reading_time_minutes', 0),
-                    'public_reactions_count': article.get('public_reactions_count', 0),
-                    'comments_count': article.get('comments_count', 0),
-                    'user': article.get('user'),
-                    'url': article.get('url'),
-                    'published_at': article.get('published_at')
-                })
-                
-                # Generate a label
-                # If the post is from our dataset, it's definitely spam
-                if article.get("is_known_spam"):
-                    label = 1
-                else:
-                    label = self.label_generator.generate_label(article)
-                
-                training_data.append((post, label))
-                
-            except Exception as e:
-                logger.error(f"Error preparing training data for article {article.get('id')}: {e}")
-                continue
-        
-        return training_data
-    
-    async def train_model(self, training_data: List[tuple]):
-        """Trains the model"""
+    async def train_model(self, training_data: List[Tuple[DevToPost, int]]):
+        """Trains the model by vectorizing posts and storing them in Redis."""
         await self.redis_classifier.init_redis()
+        logger.info(f"Starting training with {len(training_data)} samples...")
         
-        logger.info(f"Training model with {len(training_data)} samples")
-        
-        spam_count = 0
-        total_count = 0
-        
+        spam_count = sum(1 for _, label in training_data if label == 1)
+        total_count = len(training_data)
+        logger.info(f"Dataset composition: {spam_count} SPAM ({spam_count/total_count*100:.1f}%), {total_count-spam_count} LEGIT ({(total_count-spam_count)/total_count*100:.1f}%)")
+
+        processed_count = 0
         for post, label in training_data:
             try:
-                # Vectorize the post
                 vector, _ = await self.redis_classifier.vectorize_post(post)
-                
-                # Save to Redis
                 await self.redis_classifier.store_training_vector(post.id, vector, label, post.title, post.url)
-                
-                if label == 1:
-                    spam_count += 1
-                total_count += 1
-                
-                if total_count % 100 == 0:
-                    logger.info(f"Processed {total_count} samples")
-                
-                # A small delay to prevent overload
+                processed_count += 1
+                if processed_count % 100 == 0:
+                    logger.info(f"Processed {processed_count}/{total_count} samples...")
                 await asyncio.sleep(0.01)
-                
             except Exception as e:
                 logger.error(f"Error training on post {post.id}: {e}")
-                continue
         
-        logger.info(f"Training completed!")
-        logger.info(f"Total samples: {total_count}")
-        logger.info(f"Spam samples: {spam_count} ({spam_count/total_count*100:.1f}%)")
-        logger.info(f"Non-spam samples: {total_count-spam_count} ({(total_count-spam_count)/total_count*100:.1f}%)")
+        logger.info("Training completed!")
     
-    async def evaluate_model(self, test_data: List[tuple]) -> Dict[str, float]:
-        """Evaluates the model's quality"""
+    async def evaluate_model(self, test_data: List[Tuple[DevToPost, int]]) -> Dict[str, float]:
+        """Evaluates the model's performance against a test set."""
         classifier = RediSearchClassifier(self.redis_classifier)
-        
-        true_positives = false_positives = true_negatives = false_negatives = 0
+        true_positives, false_positives, true_negatives, false_negatives = 0, 0, 0, 0
         
         for post, true_label in test_data:
             try:
-                predicted_label, confidence, _, _ = await classifier.predict(post)
-                
-                if true_label == 1 and predicted_label == 1:
-                    true_positives += 1
-                elif true_label == 0 and predicted_label == 1:
-                    false_positives += 1
-                elif true_label == 0 and predicted_label == 0:
-                    true_negatives += 1
-                elif true_label == 1 and predicted_label == 0:
-                    false_negatives += 1
-                    
+                predicted_label, _, _, _ = await classifier.predict(post)
+                if true_label == 1 and predicted_label == 1: true_positives += 1
+                elif true_label == 0 and predicted_label == 1: false_positives += 1
+                elif true_label == 0 and predicted_label == 0: true_negatives += 1
+                elif true_label == 1 and predicted_label == 0: false_negatives += 1
             except Exception as e:
                 logger.error(f"Error evaluating post {post.id}: {e}")
-                continue
         
-        # Calculate metrics
-        total = true_positives + false_positives + true_negatives + false_negatives
+        total = len(test_data)
         accuracy = (true_positives + true_negatives) / max(total, 1)
         precision = true_positives / max(true_positives + false_positives, 1)
         recall = true_positives / max(true_positives + false_negatives, 1)
         f1_score = 2 * (precision * recall) / max(precision + recall, 1)
         
-        return {
-            'accuracy': accuracy,
-            'precision': precision,
-            'recall': recall,
-            'f1_score': f1_score,
-            'true_positives': true_positives,
-            'false_positives': false_positives,
-            'true_negatives': true_negatives,
-            'false_negatives': false_negatives
-        }
+        return {'accuracy': accuracy, 'precision': precision, 'recall': recall, 'f1_score': f1_score,
+                'true_positives': true_positives, 'false_positives': false_positives,
+                'true_negatives': true_negatives, 'false_negatives': false_negatives}
 
-import logging
-from typing import List, Dict, Any, Optional
-from asyncio import Queue
-
-# Special handler to redirect logs to a queue
-class QueueLogHandler(logging.Handler):
-    def __init__(self, queue: Queue):
-        super().__init__()
-        self.queue = queue
-
-    def emit(self, record):
-        self.queue.put_nowait(self.format(record))
+# ==============================================================================
+# SECTION 3: MAIN EXECUTION
+# ==============================================================================
 
 async def main(classifier: Optional[RedisVectorClassifier] = None):
-    """Main training function"""
-    # Set up logging to a file
+    """Main training function."""
     log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-    file_handler = logging.FileHandler("training.log", mode='w') # 'w' to overwrite the file on each run
+    file_handler = logging.FileHandler("training.log", mode='w')
     file_handler.setFormatter(log_formatter)
-    # Remove all previous handlers and add our own
     root_logger = logging.getLogger()
     root_logger.handlers = [file_handler]
     root_logger.setLevel(logging.INFO)
 
-    logger.info("Starting model training process")
+    logger.info("Starting model training process...")
 
     if classifier is None:
         classifier = RedisVectorClassifier()
-
-    trainer = ModelTrainer(classifier)
-    await trainer.redis_classifier.init_redis()
-
-    if not trainer.redis_classifier.redis_client:
-        logger.error("Redis is not available. The training process cannot continue without a Redis connection.")
+    
+    await classifier.init_redis()
+    if not classifier.redis_client:
+        logger.error("Redis is not available. Training process cannot continue.")
         return
-    
-    # Collect data from dev.to
+
+    # --- DATA GATHERING ---
+    # 1. Fetch live data and apply heuristics
     async with DevToDataCollector() as collector:
-        logger.info("Collecting training data from dev.to")
-        articles = await collector.collect_training_data(num_pages=30)
-    
-    # Load the local spam dataset
+        live_articles = await collector.collect_training_data(num_articles=1000)
+    label_generator = SpamLabelGenerator()
+    heuristic_data = await prepare_data_from_articles(live_articles, label_generator)
+
+    # 2. Load base spam data from JSON file
+    base_spam_data = []
     try:
         with open('spam_dataset.json', 'r', encoding='utf-8') as f:
-            spam_articles = json.load(f)
-            logger.info(f"Loaded {len(spam_articles)} articles from local spam dataset.")
-            articles.extend(spam_articles)
+            for article in json.load(f):
+                try:
+                    base_spam_data.append((DevToPost(**article), 1))
+                except Exception as e:
+                    logger.error(f"Skipping invalid article in spam_dataset.json (ID: {article.get('id')}): {e}")
+        logger.info(f"Loaded {len(base_spam_data)} articles from local spam dataset.")
     except FileNotFoundError:
-        logger.warning("spam_dataset.json not found, continuing without it.")
-    except json.JSONDecodeError:
-        logger.error("Failed to decode spam_dataset.json. Please check the file format.")
+        logger.warning("spam_dataset.json not found.")
+    
+    # 3. Load high-quality labeled data from Redis
+    moderator_data = await get_moderator_labeled_data(classifier.redis_client)
+    
+    # --- DATA COMBINATION (with priorities) ---
+    combined_data = {}
+    logger.info("Combining data sources...")
+    # Priority 1: Heuristic data (lowest priority)
+    for post, label in heuristic_data:
+        combined_data[post.id] = (post, label)
+    logger.info(f"Size after adding heuristic data: {len(combined_data)}")
+    
+    # Priority 2: Base spam file
+    for post, label in base_spam_data:
+        combined_data[post.id] = (post, label)
+    logger.info(f"Size after adding base spam data: {len(combined_data)}")
 
-    if not articles:
-        logger.error("No articles collected or loaded, exiting")
+    # Priority 3: Moderator feedback (highest priority)
+    for post, label in moderator_data:
+        combined_data[post.id] = (post, label)
+    logger.info(f"Final size after adding moderator feedback: {len(combined_data)}")
+
+    final_training_data = list(combined_data.values())
+    
+    if not final_training_data:
+        logger.error("No training data available from any source. Exiting.")
         return
     
-    # Remove duplicates
-    unique_articles = {article['id']: article for article in articles}.values()
-    articles = list(unique_articles)
-    logger.info(f"Using {len(articles)} unique articles in total")
+    # --- TRAINING AND EVALUATION ---
+    random.shuffle(final_training_data)
+    split_index = int(len(final_training_data) * 0.85)
+    train_set, test_set = final_training_data[:split_index], final_training_data[split_index:]
     
-    # Prepare data
-    training_data = await trainer.prepare_training_data(articles)
-    
-    if not training_data:
-        logger.error("No training data prepared, exiting")
+    if not test_set and train_set:
+        test_set.append(train_set.pop())
+    elif not train_set:
+        logger.error("Not enough data to create a training set. Aborting.")
         return
+
+    logger.info(f"Training set size: {len(train_set)}, Test set size: {len(test_set)}")
     
-    # Split into training and test sets
-    random.shuffle(training_data)
-    split_index = int(len(training_data) * 0.8)
-    train_data = training_data[:split_index]
-    test_data = training_data[split_index:]
+    trainer = ModelTrainer(classifier)
+    await trainer.train_model(train_set)
     
-    logger.info(f"Training set: {len(train_data)} samples")
-    logger.info(f"Test set: {len(test_data)} samples")
+    logger.info("Evaluating model performance on the test set...")
+    metrics = await trainer.evaluate_model(test_set)
     
-    # Training
-    await trainer.train_model(train_data)
+    logger.info("--- Model Evaluation Results ---")
+    for key, value in metrics.items():
+        logger.info(f"{key.replace('_', ' ').title():<18}: {value:.3f}" if isinstance(value, float) else f"{key.replace('_', ' ').title():<18}: {value}")
+    logger.info("---------------------------------")
     
-    # Evaluation
-    logger.info("Evaluating model performance")
-    metrics = await trainer.evaluate_model(test_data)
-    
-    logger.info("Model evaluation results:")
-    logger.info(f"Accuracy: {metrics['accuracy']:.3f}")
-    logger.info(f"Precision: {metrics['precision']:.3f}")
-    logger.info(f"Recall: {metrics['recall']:.3f}")
-    logger.info(f"F1-Score: {metrics['f1_score']:.3f}")
-    
-    # Save results
-    results = {
-        'timestamp': datetime.now().isoformat(),
-        'training_samples': len(train_data),
-        'test_samples': len(test_data),
-        'metrics': metrics
-    }
-    
+    results = {'timestamp': datetime.now().isoformat(), 'training_samples': len(train_set), 'test_samples': len(test_set), 'metrics': metrics}
     with open('training_results.json', 'w') as f:
         json.dump(results, f, indent=2)
     
-    logger.info("Training completed successfully!")
-    logger.info("Results saved to training_results.json")
+    logger.info("Training process completed successfully! Results saved to training_results.json")
 
 if __name__ == "__main__":
-    # Create a classifier instance and start training
-    redis_classifier = RedisVectorClassifier()
-    asyncio.run(main(redis_classifier))
+    redis_classifier_instance = RedisVectorClassifier()
+    asyncio.run(main(redis_classifier_instance))
