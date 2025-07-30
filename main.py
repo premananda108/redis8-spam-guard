@@ -1,6 +1,7 @@
 import json
 import logging
 import uvicorn
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
@@ -18,13 +19,25 @@ from core import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manages application startup and shutdown events."""
+    await redis_classifier.init_redis()
+    logger.info("Application started successfully")
+    yield
+    if redis_classifier.redis_client:
+        await redis_classifier.redis_client.close()
+    logger.info("Application shut down")
+
+
 # FastAPI app
 app = FastAPI(
     title="Dev.to Spam Classifier API",
     description="AI-powered spam detection for dev.to posts using Redis 8 Vector Sets",
     version="1.0.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    lifespan=lifespan
 )
 
 # CORS for frontend
@@ -40,19 +53,6 @@ app.add_middleware(
 redis_classifier = RedisVectorClassifier()
 classifier = RediSearchClassifier(redis_classifier)
 POST_CACHE = {} # Cache for storing full post data for feedback
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialization on startup"""
-    await redis_classifier.init_redis()
-    logger.info("Application started successfully")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on shutdown"""
-    if redis_classifier.redis_client:
-        await redis_classifier.redis_client.close()
-    logger.info("Application shut down")
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
